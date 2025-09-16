@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package pb;
+
+option go_package = "/cpe-box/pb";
+
+message Message {
+    string from = 1;
+    string body = 2;
+}
