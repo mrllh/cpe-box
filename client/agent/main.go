@@ -45,44 +45,69 @@ func connectSupervisor() {
 }
 
 func connectServer() {
+	log.Printf("Connecting to server at %s", serverAddr)
 	conn, err := net.Dial("tcp", serverAddr)
 	if err != nil {
-		fmt.Println("Failed to connect to server:", err)
+		log.Printf("Failed to connect to server: %v", err)
 		return
 	}
 	defer conn.Close()
 
 	session, err := yamux.Client(conn, nil)
 	if err != nil {
-		fmt.Println("Failed to create yamux session:", err)
+		log.Printf("Failed to create yamux session: %v", err)
+		return
 	}
-
-	stream, err := session.Open()
-	if err != nil {
-		log.Fatalf("Failed to open stream: %v", err)
-	}
+	log.Printf("Session established with server")
 
 	for {
-		msg := &pb.Message{
-			From: "agent-cli",
-			Body: "Hello server",
-		}
-		data, _ := proto.Marshal(msg)
-		_, err := stream.Write(data)
+		stream, err := session.Open()
 		if err != nil {
-			log.Fatalf("Failed to write to stream: %v", err)
+			log.Printf("Failed to open stream: %v", err)
+			break
 		}
 
-		buf := make([]byte, 1024)
-		n, err := stream.Read(buf)
-		if err != nil {
-			log.Fatalf("Failed to read from stream: %v", err)
-		}
-		var reply pb.Message
-		_ = proto.Unmarshal(buf[:n], &reply)
-		fmt.Printf("Received from server: from=%s body=%s\n", reply.From, reply.Body)
+		go func(stream net.Conn) {
+			defer stream.Close()
 
-		time.Sleep(5 * time.Second)
+			for {
+				msg := &pb.Message{
+					From: "agent-cli",
+					Body: "Hello server",
+				}
+				data, err := proto.Marshal(msg)
+				if err != nil {
+					log.Printf("Failed to marshal message: %v", err)
+					return
+				}
+
+				_, err = stream.Write(data)
+				if err != nil {
+					log.Printf("Failed to write to stream: %v", err)
+					return
+				}
+
+				buf := make([]byte, 1024)
+				n, err := stream.Read(buf)
+				if err != nil {
+					if err.Error() == "EOF" {
+						log.Printf("Stream closed by server")
+						return
+					}
+					log.Printf("Failed to read from stream: %v", err)
+					return
+				}
+
+				var reply pb.Message
+				err = proto.Unmarshal(buf[:n], &reply)
+				if err != nil {
+					log.Printf("Failed to unmarshal reply: %v", err)
+					return
+				}
+				log.Printf("Received from server: from=%s body=%s", reply.From, reply.Body)
+
+				time.Sleep(5 * time.Second)
+			}
+		}(stream)
 	}
-
 }

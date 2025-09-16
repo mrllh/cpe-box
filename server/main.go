@@ -32,11 +32,15 @@ func main() {
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
 
+	log.Printf("New connection accepted from %s", conn.RemoteAddr())
+
 	session, err := yamux.Server(conn, nil)
 	if err != nil {
 		log.Printf("Failed to create yamux server: %v", err)
 		return
 	}
+
+	log.Printf("Session established with client")
 
 	for {
 		stream, err := session.Accept()
@@ -52,25 +56,31 @@ func handleStream(stream net.Conn) {
 	defer stream.Close()
 
 	buf := make([]byte, 1024)
-	n, err := stream.Read(buf)
-	if err != nil {
-		log.Printf("Failed to read from stream: %v", err)
-		return
-	}
+	for {
+		n, err := stream.Read(buf)
+		if err != nil {
+			if err.Error() == "EOF" {
+				log.Printf("Stream closed by client")
+				return
+			}
+			log.Printf("Failed to read from stream: %v", err)
+			return
+		}
 
-	var msg pb.Message
-	err = proto.Unmarshal(buf[:n], &msg)
-	if err != nil {
-		log.Printf("Failed to unmarshal protobuf message: %v", err)
-		return
-	}
+		var msg pb.Message
+		err = proto.Unmarshal(buf[:n], &msg)
+		if err != nil {
+			log.Printf("Failed to unmarshal protobuf message: %v", err)
+			return
+		}
 
-	log.Printf("Received message from=%s body=%s", msg.From, msg.Body)
+		log.Printf("Received message from=%s body=%s", msg.From, msg.Body)
 
-	reply := &pb.Message{
-		From: "server",
-		Body: "Hello, " + msg.From,
+		reply := &pb.Message{
+			From: "server",
+			Body: "Hello, " + msg.From,
+		}
+		data, _ := proto.Marshal(reply)
+		stream.Write(data)
 	}
-	data, _ := proto.Marshal(reply)
-	stream.Write(data)
 }
