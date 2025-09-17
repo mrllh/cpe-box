@@ -21,9 +21,62 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type CommandType int32
+
+const (
+	CommandType_UNKNOWN     CommandType = 0
+	CommandType_RESTART     CommandType = 1
+	CommandType_RUN_SHELL   CommandType = 2
+	CommandType_UPLOAD_FILE CommandType = 3
+)
+
+// Enum value maps for CommandType.
+var (
+	CommandType_name = map[int32]string{
+		0: "UNKNOWN",
+		1: "RESTART",
+		2: "RUN_SHELL",
+		3: "UPLOAD_FILE",
+	}
+	CommandType_value = map[string]int32{
+		"UNKNOWN":     0,
+		"RESTART":     1,
+		"RUN_SHELL":   2,
+		"UPLOAD_FILE": 3,
+	}
+)
+
+func (x CommandType) Enum() *CommandType {
+	p := new(CommandType)
+	*p = x
+	return p
+}
+
+func (x CommandType) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (CommandType) Descriptor() protoreflect.EnumDescriptor {
+	return file_message_proto_enumTypes[0].Descriptor()
+}
+
+func (CommandType) Type() protoreflect.EnumType {
+	return &file_message_proto_enumTypes[0]
+}
+
+func (x CommandType) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use CommandType.Descriptor instead.
+func (CommandType) EnumDescriptor() ([]byte, []int) {
+	return file_message_proto_rawDescGZIP(), []int{0}
+}
+
 type Register struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Token         string                 `protobuf:"bytes,2,opt,name=token,proto3" json:"token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -65,6 +118,65 @@ func (x *Register) GetId() string {
 	return ""
 }
 
+func (x *Register) GetToken() string {
+	if x != nil {
+		return x.Token
+	}
+	return ""
+}
+
+type Heartbeat struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Ts            uint64                 `protobuf:"varint,2,opt,name=ts,proto3" json:"ts,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Heartbeat) Reset() {
+	*x = Heartbeat{}
+	mi := &file_message_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Heartbeat) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Heartbeat) ProtoMessage() {}
+
+func (x *Heartbeat) ProtoReflect() protoreflect.Message {
+	mi := &file_message_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Heartbeat.ProtoReflect.Descriptor instead.
+func (*Heartbeat) Descriptor() ([]byte, []int) {
+	return file_message_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *Heartbeat) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *Heartbeat) GetTs() uint64 {
+	if x != nil {
+		return x.Ts
+	}
+	return 0
+}
+
 type Message struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	From          string                 `protobuf:"bytes,1,opt,name=from,proto3" json:"from,omitempty"`
@@ -75,7 +187,7 @@ type Message struct {
 
 func (x *Message) Reset() {
 	*x = Message{}
-	mi := &file_message_proto_msgTypes[1]
+	mi := &file_message_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -87,7 +199,7 @@ func (x *Message) String() string {
 func (*Message) ProtoMessage() {}
 
 func (x *Message) ProtoReflect() protoreflect.Message {
-	mi := &file_message_proto_msgTypes[1]
+	mi := &file_message_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -100,7 +212,7 @@ func (x *Message) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Message.ProtoReflect.Descriptor instead.
 func (*Message) Descriptor() ([]byte, []int) {
-	return file_message_proto_rawDescGZIP(), []int{1}
+	return file_message_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *Message) GetFrom() string {
@@ -119,15 +231,16 @@ func (x *Message) GetBody() string {
 
 type Command struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	TargetId      string                 `protobuf:"bytes,1,opt,name=target_id,json=targetId,proto3" json:"target_id,omitempty"`
-	Action        string                 `protobuf:"bytes,2,opt,name=action,proto3" json:"action,omitempty"`
+	Type          CommandType            `protobuf:"varint,1,opt,name=type,proto3,enum=pb.CommandType" json:"type,omitempty"`
+	TargetId      string                 `protobuf:"bytes,2,opt,name=target_id,json=targetId,proto3" json:"target_id,omitempty"`
+	Payload       string                 `protobuf:"bytes,3,opt,name=payload,proto3" json:"payload,omitempty"` // JSON or simple string (e.g. command or filename)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Command) Reset() {
 	*x = Command{}
-	mi := &file_message_proto_msgTypes[2]
+	mi := &file_message_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -139,7 +252,7 @@ func (x *Command) String() string {
 func (*Command) ProtoMessage() {}
 
 func (x *Command) ProtoReflect() protoreflect.Message {
-	mi := &file_message_proto_msgTypes[2]
+	mi := &file_message_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -152,7 +265,14 @@ func (x *Command) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Command.ProtoReflect.Descriptor instead.
 func (*Command) Descriptor() ([]byte, []int) {
-	return file_message_proto_rawDescGZIP(), []int{2}
+	return file_message_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *Command) GetType() CommandType {
+	if x != nil {
+		return x.Type
+	}
+	return CommandType_UNKNOWN
 }
 
 func (x *Command) GetTargetId() string {
@@ -162,9 +282,145 @@ func (x *Command) GetTargetId() string {
 	return ""
 }
 
-func (x *Command) GetAction() string {
+func (x *Command) GetPayload() string {
 	if x != nil {
-		return x.Action
+		return x.Payload
+	}
+	return ""
+}
+
+type CommandResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TargetId      string                 `protobuf:"bytes,1,opt,name=target_id,json=targetId,proto3" json:"target_id,omitempty"`
+	Ok            bool                   `protobuf:"varint,2,opt,name=ok,proto3" json:"ok,omitempty"`
+	Output        string                 `protobuf:"bytes,3,opt,name=output,proto3" json:"output,omitempty"`
+	ReqId         string                 `protobuf:"bytes,4,opt,name=req_id,json=reqId,proto3" json:"req_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CommandResult) Reset() {
+	*x = CommandResult{}
+	mi := &file_message_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CommandResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CommandResult) ProtoMessage() {}
+
+func (x *CommandResult) ProtoReflect() protoreflect.Message {
+	mi := &file_message_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CommandResult.ProtoReflect.Descriptor instead.
+func (*CommandResult) Descriptor() ([]byte, []int) {
+	return file_message_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *CommandResult) GetTargetId() string {
+	if x != nil {
+		return x.TargetId
+	}
+	return ""
+}
+
+func (x *CommandResult) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+func (x *CommandResult) GetOutput() string {
+	if x != nil {
+		return x.Output
+	}
+	return ""
+}
+
+func (x *CommandResult) GetReqId() string {
+	if x != nil {
+		return x.ReqId
+	}
+	return ""
+}
+
+type FileChunk struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TransferId    string                 `protobuf:"bytes,1,opt,name=transfer_id,json=transferId,proto3" json:"transfer_id,omitempty"`
+	Chunk         []byte                 `protobuf:"bytes,2,opt,name=chunk,proto3" json:"chunk,omitempty"`
+	Last          bool                   `protobuf:"varint,3,opt,name=last,proto3" json:"last,omitempty"`
+	Filename      string                 `protobuf:"bytes,4,opt,name=filename,proto3" json:"filename,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FileChunk) Reset() {
+	*x = FileChunk{}
+	mi := &file_message_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FileChunk) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FileChunk) ProtoMessage() {}
+
+func (x *FileChunk) ProtoReflect() protoreflect.Message {
+	mi := &file_message_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FileChunk.ProtoReflect.Descriptor instead.
+func (*FileChunk) Descriptor() ([]byte, []int) {
+	return file_message_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *FileChunk) GetTransferId() string {
+	if x != nil {
+		return x.TransferId
+	}
+	return ""
+}
+
+func (x *FileChunk) GetChunk() []byte {
+	if x != nil {
+		return x.Chunk
+	}
+	return nil
+}
+
+func (x *FileChunk) GetLast() bool {
+	if x != nil {
+		return x.Last
+	}
+	return false
+}
+
+func (x *FileChunk) GetFilename() string {
+	if x != nil {
+		return x.Filename
 	}
 	return ""
 }
@@ -174,8 +430,11 @@ type Envelope struct {
 	// Types that are valid to be assigned to Payload:
 	//
 	//	*Envelope_Register
+	//	*Envelope_Heartbeat
 	//	*Envelope_Message
 	//	*Envelope_Command
+	//	*Envelope_Result
+	//	*Envelope_FileChunk
 	Payload       isEnvelope_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -183,7 +442,7 @@ type Envelope struct {
 
 func (x *Envelope) Reset() {
 	*x = Envelope{}
-	mi := &file_message_proto_msgTypes[3]
+	mi := &file_message_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -195,7 +454,7 @@ func (x *Envelope) String() string {
 func (*Envelope) ProtoMessage() {}
 
 func (x *Envelope) ProtoReflect() protoreflect.Message {
-	mi := &file_message_proto_msgTypes[3]
+	mi := &file_message_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -208,7 +467,7 @@ func (x *Envelope) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Envelope.ProtoReflect.Descriptor instead.
 func (*Envelope) Descriptor() ([]byte, []int) {
-	return file_message_proto_rawDescGZIP(), []int{3}
+	return file_message_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Envelope) GetPayload() isEnvelope_Payload {
@@ -222,6 +481,15 @@ func (x *Envelope) GetRegister() *Register {
 	if x != nil {
 		if x, ok := x.Payload.(*Envelope_Register); ok {
 			return x.Register
+		}
+	}
+	return nil
+}
+
+func (x *Envelope) GetHeartbeat() *Heartbeat {
+	if x != nil {
+		if x, ok := x.Payload.(*Envelope_Heartbeat); ok {
+			return x.Heartbeat
 		}
 	}
 	return nil
@@ -245,6 +513,24 @@ func (x *Envelope) GetCommand() *Command {
 	return nil
 }
 
+func (x *Envelope) GetResult() *CommandResult {
+	if x != nil {
+		if x, ok := x.Payload.(*Envelope_Result); ok {
+			return x.Result
+		}
+	}
+	return nil
+}
+
+func (x *Envelope) GetFileChunk() *FileChunk {
+	if x != nil {
+		if x, ok := x.Payload.(*Envelope_FileChunk); ok {
+			return x.FileChunk
+		}
+	}
+	return nil
+}
+
 type isEnvelope_Payload interface {
 	isEnvelope_Payload()
 }
@@ -253,38 +539,81 @@ type Envelope_Register struct {
 	Register *Register `protobuf:"bytes,1,opt,name=register,proto3,oneof"`
 }
 
+type Envelope_Heartbeat struct {
+	Heartbeat *Heartbeat `protobuf:"bytes,2,opt,name=heartbeat,proto3,oneof"`
+}
+
 type Envelope_Message struct {
-	Message *Message `protobuf:"bytes,2,opt,name=message,proto3,oneof"`
+	Message *Message `protobuf:"bytes,3,opt,name=message,proto3,oneof"`
 }
 
 type Envelope_Command struct {
-	Command *Command `protobuf:"bytes,3,opt,name=command,proto3,oneof"`
+	Command *Command `protobuf:"bytes,4,opt,name=command,proto3,oneof"`
+}
+
+type Envelope_Result struct {
+	Result *CommandResult `protobuf:"bytes,5,opt,name=result,proto3,oneof"`
+}
+
+type Envelope_FileChunk struct {
+	FileChunk *FileChunk `protobuf:"bytes,6,opt,name=file_chunk,json=fileChunk,proto3,oneof"`
 }
 
 func (*Envelope_Register) isEnvelope_Payload() {}
+
+func (*Envelope_Heartbeat) isEnvelope_Payload() {}
 
 func (*Envelope_Message) isEnvelope_Payload() {}
 
 func (*Envelope_Command) isEnvelope_Payload() {}
 
+func (*Envelope_Result) isEnvelope_Payload() {}
+
+func (*Envelope_FileChunk) isEnvelope_Payload() {}
+
 var File_message_proto protoreflect.FileDescriptor
 
 const file_message_proto_rawDesc = "" +
 	"\n" +
-	"\rmessage.proto\x12\x02pb\"\x1a\n" +
+	"\rmessage.proto\x12\x02pb\"0\n" +
 	"\bRegister\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"1\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
+	"\x05token\x18\x02 \x01(\tR\x05token\"+\n" +
+	"\tHeartbeat\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x0e\n" +
+	"\x02ts\x18\x02 \x01(\x04R\x02ts\"1\n" +
 	"\aMessage\x12\x12\n" +
 	"\x04from\x18\x01 \x01(\tR\x04from\x12\x12\n" +
-	"\x04body\x18\x02 \x01(\tR\x04body\">\n" +
-	"\aCommand\x12\x1b\n" +
-	"\ttarget_id\x18\x01 \x01(\tR\btargetId\x12\x16\n" +
-	"\x06action\x18\x02 \x01(\tR\x06action\"\x93\x01\n" +
+	"\x04body\x18\x02 \x01(\tR\x04body\"e\n" +
+	"\aCommand\x12#\n" +
+	"\x04type\x18\x01 \x01(\x0e2\x0f.pb.CommandTypeR\x04type\x12\x1b\n" +
+	"\ttarget_id\x18\x02 \x01(\tR\btargetId\x12\x18\n" +
+	"\apayload\x18\x03 \x01(\tR\apayload\"k\n" +
+	"\rCommandResult\x12\x1b\n" +
+	"\ttarget_id\x18\x01 \x01(\tR\btargetId\x12\x0e\n" +
+	"\x02ok\x18\x02 \x01(\bR\x02ok\x12\x16\n" +
+	"\x06output\x18\x03 \x01(\tR\x06output\x12\x15\n" +
+	"\x06req_id\x18\x04 \x01(\tR\x05reqId\"r\n" +
+	"\tFileChunk\x12\x1f\n" +
+	"\vtransfer_id\x18\x01 \x01(\tR\n" +
+	"transferId\x12\x14\n" +
+	"\x05chunk\x18\x02 \x01(\fR\x05chunk\x12\x12\n" +
+	"\x04last\x18\x03 \x01(\bR\x04last\x12\x1a\n" +
+	"\bfilename\x18\x04 \x01(\tR\bfilename\"\x9f\x02\n" +
 	"\bEnvelope\x12*\n" +
-	"\bregister\x18\x01 \x01(\v2\f.pb.RegisterH\x00R\bregister\x12'\n" +
-	"\amessage\x18\x02 \x01(\v2\v.pb.MessageH\x00R\amessage\x12'\n" +
-	"\acommand\x18\x03 \x01(\v2\v.pb.CommandH\x00R\acommandB\t\n" +
-	"\apayloadB\rZ\v/cpe-box/pbb\x06proto3"
+	"\bregister\x18\x01 \x01(\v2\f.pb.RegisterH\x00R\bregister\x12-\n" +
+	"\theartbeat\x18\x02 \x01(\v2\r.pb.HeartbeatH\x00R\theartbeat\x12'\n" +
+	"\amessage\x18\x03 \x01(\v2\v.pb.MessageH\x00R\amessage\x12'\n" +
+	"\acommand\x18\x04 \x01(\v2\v.pb.CommandH\x00R\acommand\x12+\n" +
+	"\x06result\x18\x05 \x01(\v2\x11.pb.CommandResultH\x00R\x06result\x12.\n" +
+	"\n" +
+	"file_chunk\x18\x06 \x01(\v2\r.pb.FileChunkH\x00R\tfileChunkB\t\n" +
+	"\apayload*G\n" +
+	"\vCommandType\x12\v\n" +
+	"\aUNKNOWN\x10\x00\x12\v\n" +
+	"\aRESTART\x10\x01\x12\r\n" +
+	"\tRUN_SHELL\x10\x02\x12\x0f\n" +
+	"\vUPLOAD_FILE\x10\x03B\rZ\v/cpe-box/pbb\x06proto3"
 
 var (
 	file_message_proto_rawDescOnce sync.Once
@@ -298,22 +627,31 @@ func file_message_proto_rawDescGZIP() []byte {
 	return file_message_proto_rawDescData
 }
 
-var file_message_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_message_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_message_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_message_proto_goTypes = []any{
-	(*Register)(nil), // 0: pb.Register
-	(*Message)(nil),  // 1: pb.Message
-	(*Command)(nil),  // 2: pb.Command
-	(*Envelope)(nil), // 3: pb.Envelope
+	(CommandType)(0),      // 0: pb.CommandType
+	(*Register)(nil),      // 1: pb.Register
+	(*Heartbeat)(nil),     // 2: pb.Heartbeat
+	(*Message)(nil),       // 3: pb.Message
+	(*Command)(nil),       // 4: pb.Command
+	(*CommandResult)(nil), // 5: pb.CommandResult
+	(*FileChunk)(nil),     // 6: pb.FileChunk
+	(*Envelope)(nil),      // 7: pb.Envelope
 }
 var file_message_proto_depIdxs = []int32{
-	0, // 0: pb.Envelope.register:type_name -> pb.Register
-	1, // 1: pb.Envelope.message:type_name -> pb.Message
-	2, // 2: pb.Envelope.command:type_name -> pb.Command
-	3, // [3:3] is the sub-list for method output_type
-	3, // [3:3] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	0, // 0: pb.Command.type:type_name -> pb.CommandType
+	1, // 1: pb.Envelope.register:type_name -> pb.Register
+	2, // 2: pb.Envelope.heartbeat:type_name -> pb.Heartbeat
+	3, // 3: pb.Envelope.message:type_name -> pb.Message
+	4, // 4: pb.Envelope.command:type_name -> pb.Command
+	5, // 5: pb.Envelope.result:type_name -> pb.CommandResult
+	6, // 6: pb.Envelope.file_chunk:type_name -> pb.FileChunk
+	7, // [7:7] is the sub-list for method output_type
+	7, // [7:7] is the sub-list for method input_type
+	7, // [7:7] is the sub-list for extension type_name
+	7, // [7:7] is the sub-list for extension extendee
+	0, // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_message_proto_init() }
@@ -321,23 +659,27 @@ func file_message_proto_init() {
 	if File_message_proto != nil {
 		return
 	}
-	file_message_proto_msgTypes[3].OneofWrappers = []any{
+	file_message_proto_msgTypes[6].OneofWrappers = []any{
 		(*Envelope_Register)(nil),
+		(*Envelope_Heartbeat)(nil),
 		(*Envelope_Message)(nil),
 		(*Envelope_Command)(nil),
+		(*Envelope_Result)(nil),
+		(*Envelope_FileChunk)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_message_proto_rawDesc), len(file_message_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   4,
+			NumEnums:      1,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_message_proto_goTypes,
 		DependencyIndexes: file_message_proto_depIdxs,
+		EnumInfos:         file_message_proto_enumTypes,
 		MessageInfos:      file_message_proto_msgTypes,
 	}.Build()
 	File_message_proto = out.File

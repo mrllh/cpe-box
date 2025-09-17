@@ -4,8 +4,21 @@ package pb;
 
 option go_package = "/cpe-box/pb";
 
+enum CommandType {
+  UNKNOWN = 0;
+  RESTART = 1;
+  RUN_SHELL = 2;
+  UPLOAD_FILE = 3;
+}
+
 message Register {
   string id = 1;
+  string token = 2;
+}
+
+message Heartbeat {
+  string id = 1;
+  uint64 ts = 2;
 }
 
 message Message {
@@ -14,14 +27,32 @@ message Message {
 }
 
 message Command {
-  string target_id = 1; 
-  string action = 2;    
+  CommandType type = 1;
+  string target_id = 2;
+  string payload = 3; // JSON or simple string (e.g. command or filename)
+}
+
+message CommandResult {
+  string target_id = 1;
+  bool ok = 2;
+  string output = 3;
+  string req_id = 4; 
+}
+
+message FileChunk {
+  string transfer_id = 1;
+  bytes chunk = 2;
+  bool last = 3;
+  string filename = 4;
 }
 
 message Envelope {
   oneof payload {
     Register register = 1;
-    Message message   = 2;
-    Command command   = 3;
+    Heartbeat heartbeat = 2;
+    Message message = 3;
+    Command command = 4;
+    CommandResult result = 5;
+    FileChunk file_chunk = 6;
   }
 }
