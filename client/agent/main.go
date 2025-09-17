@@ -1,24 +1,33 @@
 package main
 
 import (
-	"cpe-box/pb"
+	"flag"
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"time"
 
 	"github.com/hashicorp/yamux"
 	"google.golang.org/protobuf/proto"
+
+	"cpe-box/pb"
 )
 
 const (
-	udsPath    = "/tmp/cpe_agent.sock"
 	serverAddr = "127.0.0.1:9999"
 )
 
-func main() {
-	go connectSupervisor()
+var udsPath = os.Getenv("CPE_AGENT_SOCK")
 
+var agentID string
+
+func main() {
+	// 从命令行获取 ID
+	flag.StringVar(&agentID, "id", "agent-123", "unique agent ID")
+	flag.Parse()
+
+	go connectSupervisor()
 	connectServer()
 }
 
@@ -26,14 +35,13 @@ func connectSupervisor() {
 	for {
 		conn, err := net.Dial("unix", udsPath)
 		if err != nil {
-			fmt.Println("Failed to connect to supervisor:", err)
+			fmt.Println("Connect supervisor error:", err)
 			time.Sleep(2 * time.Second)
 			continue
 		}
 		fmt.Println("Connected to supervisor")
-
 		for {
-			_, err = conn.Write([]byte("agent-cli alive"))
+			_, err = conn.Write([]byte(agentID + " alive\n"))
 			if err != nil {
 				fmt.Println("Write to supervisor error:", err)
 				break
@@ -45,69 +53,70 @@ func connectSupervisor() {
 }
 
 func connectServer() {
-	log.Printf("Connecting to server at %s", serverAddr)
 	conn, err := net.Dial("tcp", serverAddr)
 	if err != nil {
-		log.Printf("Failed to connect to server: %v", err)
-		return
+		log.Fatalf("Dial server error: %v", err)
 	}
 	defer conn.Close()
 
 	session, err := yamux.Client(conn, nil)
 	if err != nil {
-		log.Printf("Failed to create yamux session: %v", err)
-		return
+		log.Fatalf("Yamux error: %v", err)
 	}
-	log.Printf("Session established with server")
 
+	stream, err := session.Open()
+	if err != nil {
+		log.Fatalf("Open stream error: %v", err)
+	}
+	defer stream.Close()
+
+	reg := &pb.Envelope{
+		Payload: &pb.Envelope_Register{
+			Register: &pb.Register{Id: agentID},
+		},
+	}
+	data, _ := proto.Marshal(reg)
+	stream.Write(data)
+	log.Printf("Registered as %s", agentID)
+
+	buf := make([]byte, 4096)
 	for {
-		stream, err := session.Open()
+		n, err := stream.Read(buf)
 		if err != nil {
-			log.Printf("Failed to open stream: %v", err)
-			break
+			log.Printf("Read error: %v", err)
+			return
 		}
 
-		go func(stream net.Conn) {
-			defer stream.Close()
+		var env pb.Envelope
+		if err := proto.Unmarshal(buf[:n], &env); err != nil {
+			log.Printf("Unmarshal error: %v", err)
+			continue
+		}
 
-			for {
-				msg := &pb.Message{
-					From: "agent-cli",
-					Body: "Hello server",
-				}
-				data, err := proto.Marshal(msg)
-				if err != nil {
-					log.Printf("Failed to marshal message: %v", err)
-					return
-				}
-
-				_, err = stream.Write(data)
-				if err != nil {
-					log.Printf("Failed to write to stream: %v", err)
-					return
-				}
-
-				buf := make([]byte, 1024)
-				n, err := stream.Read(buf)
-				if err != nil {
-					if err.Error() == "EOF" {
-						log.Printf("Stream closed by server")
-						return
-					}
-					log.Printf("Failed to read from stream: %v", err)
-					return
-				}
-
-				var reply pb.Message
-				err = proto.Unmarshal(buf[:n], &reply)
-				if err != nil {
-					log.Printf("Failed to unmarshal reply: %v", err)
-					return
-				}
-				log.Printf("Received from server: from=%s body=%s", reply.From, reply.Body)
-
-				time.Sleep(5 * time.Second)
-			}
-		}(stream)
+		switch x := env.Payload.(type) {
+		case *pb.Envelope_Command:
+			handleCommand(x.Command)
+		case *pb.Envelope_Message:
+			handleMessage(x.Message)
+		}
 	}
+}
+
+func handleCommand(cmd *pb.Command) {
+	fmt.Printf("[%s] Received command: %s (target=%s)\n", agentID, cmd.Action, cmd.TargetId)
+	if cmd.Action == "RESTART" && cmd.TargetId == agentID {
+		conn, err := net.Dial("unix", udsPath)
+		if err != nil {
+			fmt.Println("Cannot connect to supervisor:", err)
+			return
+		}
+		defer conn.Close()
+		conn.Write([]byte("restart"))
+		fmt.Println("Sent restart request to supervisor")
+		os.Exit(0)
+	}
+}
+
+func handleMessage(msg *pb.Message) {
+	fmt.Printf("[%s] Message from %s: %s\n", agentID, msg.From, msg.Body)
 }

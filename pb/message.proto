@@ -4,7 +4,24 @@ package pb;
 
 option go_package = "/cpe-box/pb";
 
+message Register {
+  string id = 1;
+}
+
 message Message {
-    string from = 1;
-    string body = 2;
+  string from = 1;
+  string body = 2;
+}
+
+message Command {
+  string target_id = 1; 
+  string action = 2;    
+}
+
+message Envelope {
+  oneof payload {
+    Register register = 1;
+    Message message   = 2;
+    Command command   = 3;
+  }
 }

@@ -1,29 +1,44 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
+	"sync"
 	"time"
 )
 
-const (
-	socketPath = "/tmp/cpe_agent.sock"
-	maxRetries = 10
+var (
+	agentID   string
+	socketDir = "/tmp"
+)
+
+const maxRetries = 10
+
+var (
+	mu        sync.Mutex
+	current   *exec.Cmd
+	restartCh = make(chan struct{}, 1)
 )
 
 func main() {
+	flag.StringVar(&agentID, "id", "agent-123", "unique agent ID")
+	flag.Parse()
+
+	socketPath := fmt.Sprintf("%s/cpe_%s.sock", socketDir, agentID)
 	_ = os.Remove(socketPath)
 
 	l, err := net.Listen("unix", socketPath)
 	if err != nil {
 		fmt.Println("Listen UDS error:", err)
+		return
 	}
 	defer l.Close()
-	fmt.Println("Supervisor is listening on, waiting for agent to connect...")
+	fmt.Printf("Supervisor for %s listening on %s\n", agentID, socketPath)
 
-	go startAgent()
+	go agentManager(socketPath)
 
 	for {
 		conn, err := l.Accept()
@@ -35,16 +50,21 @@ func main() {
 	}
 }
 
-func startAgent() {
+func agentManager(socketPath string) {
 	retry := 0
 	delay := time.Second
 
-	for retry < maxRetries {
-		fmt.Printf("Starting agent, attempt %d...\n", retry+1)
-
-		cmd := exec.Command("../agent/agent-cli")
+	for {
+		fmt.Printf("Starting agent %s, attempt %d...\n", agentID, retry+1)
+		cmd := exec.Command("../agent/agent-cli", "--id", agentID)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
+		cmd.Env = append(os.Environ(),
+			fmt.Sprintf("CPE_AGENT_SOCK=%s", socketPath)) // 传给 agent 用哪个 UDS
+
+		mu.Lock()
+		current = cmd
+		mu.Unlock()
 
 		err := cmd.Start()
 		if err != nil {
@@ -52,31 +72,47 @@ func startAgent() {
 			return
 		}
 
-		err = cmd.Wait()
-		fmt.Println("Agent process exited:", err)
+		waitDone := make(chan error, 1)
+		go func() { waitDone <- cmd.Wait() }()
 
-		retry++
-		time.Sleep(delay)
-		delay *= 2
+		select {
+		case err := <-waitDone:
+			fmt.Printf("Agent %s exited: %v\n", agentID, err)
+			retry++
+			if retry >= maxRetries {
+				fmt.Printf("Max retries reached for %s, stopping\n", agentID)
+				return
+			}
+			time.Sleep(delay)
+			delay *= 2
+		case <-restartCh:
+			fmt.Printf("Supervisor: restart requested for %s, killing agent...\n", agentID)
+			_ = cmd.Process.Kill()
+			<-waitDone
+			fmt.Printf("Agent %s killed; restarting immediately\n", agentID)
+			retry = 0
+			delay = time.Second
+		}
 	}
-
-	fmt.Println("Max retries reached. Giving up on starting agent.")
 }
 
 func handleConn(conn net.Conn) {
 	defer conn.Close()
-
 	buf := make([]byte, 1024)
 
 	for {
 		n, err := conn.Read(buf)
 		if err != nil {
-			fmt.Println("Read error:", err)
 			return
 		}
 		msg := string(buf[:n])
-		fmt.Println("Received from agent:", msg)
+		fmt.Printf("Supervisor[%s] received: %s\n", agentID, msg)
 
-		conn.Write([]byte("ok"))
+		if msg == "restart" {
+			select {
+			case restartCh <- struct{}{}:
+			default:
+			}
+		}
 	}
 }

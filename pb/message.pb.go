@@ -7,12 +7,11 @@
 package pb
 
 import (
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
-
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -21,6 +20,50 @@ const (
 	// Verify that runtime/protoimpl is sufficiently up-to-date.
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
+
+type Register struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Register) Reset() {
+	*x = Register{}
+	mi := &file_message_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Register) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Register) ProtoMessage() {}
+
+func (x *Register) ProtoReflect() protoreflect.Message {
+	mi := &file_message_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Register.ProtoReflect.Descriptor instead.
+func (*Register) Descriptor() ([]byte, []int) {
+	return file_message_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *Register) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
 
 type Message struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -32,7 +75,7 @@ type Message struct {
 
 func (x *Message) Reset() {
 	*x = Message{}
-	mi := &file_message_proto_msgTypes[0]
+	mi := &file_message_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -44,7 +87,7 @@ func (x *Message) String() string {
 func (*Message) ProtoMessage() {}
 
 func (x *Message) ProtoReflect() protoreflect.Message {
-	mi := &file_message_proto_msgTypes[0]
+	mi := &file_message_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -57,7 +100,7 @@ func (x *Message) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Message.ProtoReflect.Descriptor instead.
 func (*Message) Descriptor() ([]byte, []int) {
-	return file_message_proto_rawDescGZIP(), []int{0}
+	return file_message_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *Message) GetFrom() string {
@@ -74,14 +117,174 @@ func (x *Message) GetBody() string {
 	return ""
 }
 
+type Command struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TargetId      string                 `protobuf:"bytes,1,opt,name=target_id,json=targetId,proto3" json:"target_id,omitempty"`
+	Action        string                 `protobuf:"bytes,2,opt,name=action,proto3" json:"action,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Command) Reset() {
+	*x = Command{}
+	mi := &file_message_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Command) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Command) ProtoMessage() {}
+
+func (x *Command) ProtoReflect() protoreflect.Message {
+	mi := &file_message_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Command.ProtoReflect.Descriptor instead.
+func (*Command) Descriptor() ([]byte, []int) {
+	return file_message_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *Command) GetTargetId() string {
+	if x != nil {
+		return x.TargetId
+	}
+	return ""
+}
+
+func (x *Command) GetAction() string {
+	if x != nil {
+		return x.Action
+	}
+	return ""
+}
+
+type Envelope struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Payload:
+	//
+	//	*Envelope_Register
+	//	*Envelope_Message
+	//	*Envelope_Command
+	Payload       isEnvelope_Payload `protobuf_oneof:"payload"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Envelope) Reset() {
+	*x = Envelope{}
+	mi := &file_message_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Envelope) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Envelope) ProtoMessage() {}
+
+func (x *Envelope) ProtoReflect() protoreflect.Message {
+	mi := &file_message_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Envelope.ProtoReflect.Descriptor instead.
+func (*Envelope) Descriptor() ([]byte, []int) {
+	return file_message_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *Envelope) GetPayload() isEnvelope_Payload {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+func (x *Envelope) GetRegister() *Register {
+	if x != nil {
+		if x, ok := x.Payload.(*Envelope_Register); ok {
+			return x.Register
+		}
+	}
+	return nil
+}
+
+func (x *Envelope) GetMessage() *Message {
+	if x != nil {
+		if x, ok := x.Payload.(*Envelope_Message); ok {
+			return x.Message
+		}
+	}
+	return nil
+}
+
+func (x *Envelope) GetCommand() *Command {
+	if x != nil {
+		if x, ok := x.Payload.(*Envelope_Command); ok {
+			return x.Command
+		}
+	}
+	return nil
+}
+
+type isEnvelope_Payload interface {
+	isEnvelope_Payload()
+}
+
+type Envelope_Register struct {
+	Register *Register `protobuf:"bytes,1,opt,name=register,proto3,oneof"`
+}
+
+type Envelope_Message struct {
+	Message *Message `protobuf:"bytes,2,opt,name=message,proto3,oneof"`
+}
+
+type Envelope_Command struct {
+	Command *Command `protobuf:"bytes,3,opt,name=command,proto3,oneof"`
+}
+
+func (*Envelope_Register) isEnvelope_Payload() {}
+
+func (*Envelope_Message) isEnvelope_Payload() {}
+
+func (*Envelope_Command) isEnvelope_Payload() {}
+
 var File_message_proto protoreflect.FileDescriptor
 
 const file_message_proto_rawDesc = "" +
 	"\n" +
-	"\rmessage.proto\x12\x02pb\"1\n" +
+	"\rmessage.proto\x12\x02pb\"\x1a\n" +
+	"\bRegister\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"1\n" +
 	"\aMessage\x12\x12\n" +
 	"\x04from\x18\x01 \x01(\tR\x04from\x12\x12\n" +
-	"\x04body\x18\x02 \x01(\tR\x04bodyB\rZ\v/cpe-box/pbb\x06proto3"
+	"\x04body\x18\x02 \x01(\tR\x04body\">\n" +
+	"\aCommand\x12\x1b\n" +
+	"\ttarget_id\x18\x01 \x01(\tR\btargetId\x12\x16\n" +
+	"\x06action\x18\x02 \x01(\tR\x06action\"\x93\x01\n" +
+	"\bEnvelope\x12*\n" +
+	"\bregister\x18\x01 \x01(\v2\f.pb.RegisterH\x00R\bregister\x12'\n" +
+	"\amessage\x18\x02 \x01(\v2\v.pb.MessageH\x00R\amessage\x12'\n" +
+	"\acommand\x18\x03 \x01(\v2\v.pb.CommandH\x00R\acommandB\t\n" +
+	"\apayloadB\rZ\v/cpe-box/pbb\x06proto3"
 
 var (
 	file_message_proto_rawDescOnce sync.Once
@@ -95,16 +298,22 @@ func file_message_proto_rawDescGZIP() []byte {
 	return file_message_proto_rawDescData
 }
 
-var file_message_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
+var file_message_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_message_proto_goTypes = []any{
-	(*Message)(nil), // 0: pb.Message
+	(*Register)(nil), // 0: pb.Register
+	(*Message)(nil),  // 1: pb.Message
+	(*Command)(nil),  // 2: pb.Command
+	(*Envelope)(nil), // 3: pb.Envelope
 }
 var file_message_proto_depIdxs = []int32{
-	0, // [0:0] is the sub-list for method output_type
-	0, // [0:0] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	0, // 0: pb.Envelope.register:type_name -> pb.Register
+	1, // 1: pb.Envelope.message:type_name -> pb.Message
+	2, // 2: pb.Envelope.command:type_name -> pb.Command
+	3, // [3:3] is the sub-list for method output_type
+	3, // [3:3] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_message_proto_init() }
@@ -112,13 +321,18 @@ func file_message_proto_init() {
 	if File_message_proto != nil {
 		return
 	}
+	file_message_proto_msgTypes[3].OneofWrappers = []any{
+		(*Envelope_Register)(nil),
+		(*Envelope_Message)(nil),
+		(*Envelope_Command)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_message_proto_rawDesc), len(file_message_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   1,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
