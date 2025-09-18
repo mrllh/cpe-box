@@ -248,14 +248,103 @@ func acceptStreamLoop(session *yamux.Session) {
 			logger.Warnf("session.Accept error: %v", err)
 			return
 		}
-		go handleFileStream(stream)
+		go handleIncomingStream(stream)
 	}
 }
 
-func handleFileStream(stream net.Conn) {
+func handleIncomingStream(stream net.Conn) {
 	defer stream.Close()
 
-	var file *os.File
+	// Read first framed envelope to know stream type
+	var env pb.Envelope
+	if err := framing.ReadMessage(stream, &env); err != nil {
+		if err == io.EOF {
+			logger.Infof("incoming stream closed")
+		} else {
+			logger.Warnf("failed to read initial envelope on stream: %v", err)
+		}
+		return
+	}
+
+	switch x := env.Payload.(type) {
+	case *pb.Envelope_FileChunk:
+		// This stream is a file transfer: handle remaining file chunks in framing mode
+		handleFileStreamFramed(stream, x.FileChunk)
+		return
+
+	case *pb.Envelope_PortForward:
+		// This stream is port forward: x.PortForward.TargetAddr is agent-local target
+		target := x.PortForward.TargetAddr
+		// Dial local target on agent
+		localConn, err := net.Dial("tcp", target)
+		if err != nil {
+			logger.Warnf("port-forward dial local %s err: %v", target, err)
+			return
+		}
+		// After we consumed the initial framed metadata, switch to raw io.Copy between stream and localConn
+		done := make(chan struct{}, 2)
+		go func() {
+			_, err := io.Copy(localConn, stream)
+			if err != nil {
+				logger.Warnf("io.Copy stream->local err: %v", err)
+			}
+			localConn.Close()
+			done <- struct{}{}
+		}()
+		go func() {
+			_, err := io.Copy(stream, localConn)
+			if err != nil {
+				logger.Warnf("io.Copy local->stream err: %v", err)
+			}
+			done <- struct{}{}
+		}()
+		<-done
+		localConn.Close()
+		return
+
+	default:
+		logger.Warnf("unexpected initial envelope on stream")
+		return
+	}
+}
+
+func handleFileStreamFramed(stream net.Conn, first *pb.FileChunk) {
+	// first chunk might be meta (no bytes) or bytes
+	transferID := first.TransferId
+	filename := first.Filename
+
+	path := filepath.Join("/tmp", transferID+"_"+filename)
+	var f *os.File
+	if first.Last {
+		// zero-length file
+		_ = os.WriteFile(path, nil, 0644)
+		logger.Infof("received zero-length file: %s", path)
+		return
+	}
+	// if first chunk contains bytes, write them
+	if len(first.Chunk) > 0 {
+		var err error
+		f, err = os.Create(path)
+		if err != nil {
+			logger.Warnf("create file err: %v", err)
+			return
+		}
+		if _, err := f.Write(first.Chunk); err != nil {
+			logger.Warnf("write chunk err: %v", err)
+			f.Close()
+			return
+		}
+	} else {
+		// create file to append rest
+		var err error
+		f, err = os.Create(path)
+		if err != nil {
+			logger.Warnf("create file err: %v", err)
+			return
+		}
+	}
+
+	// read remaining framed FileChunk messages until Last==true
 	for {
 		var env pb.Envelope
 		if err := framing.ReadMessage(stream, &env); err != nil {
@@ -264,58 +353,26 @@ func handleFileStream(stream net.Conn) {
 			} else {
 				logger.Warnf("read chunk err: %v", err)
 			}
-			if file != nil {
-				file.Close()
-			}
+			f.Close()
 			return
 		}
-
 		fch, ok := env.Payload.(*pb.Envelope_FileChunk)
 		if !ok {
-			logger.Warnf("unexpected envelope on file stream")
+			logger.Warnf("expected FileChunk on file stream")
 			continue
 		}
 		fc := fch.FileChunk
-		if fc.TransferId == "" {
-			logger.Warnf("file chunk missing transfer_id")
-			continue
-		}
-
-		// prepare path
-		path := filepath.Join("/tmp", fc.TransferId+"_"+fc.Filename)
-
-		if fc.Last {
-			// finish
-			if file != nil {
-				file.Close()
-				file = nil
-				logger.Infof("received file finished: %s", path)
-			} else {
-				// zero-length file: create empty file
-				f0, err := os.Create(path)
-				if err == nil {
-					f0.Close()
-				}
-			}
-			return // done for this stream
-		}
-
-		// open file if not yet
-		if file == nil {
-			f, err := os.Create(path)
-			if err != nil {
-				logger.Warnf("create file err: %v", err)
-				return
-			}
-			file = f
-		}
-
 		if len(fc.Chunk) > 0 {
-			if _, err := file.Write(fc.Chunk); err != nil {
+			if _, err := f.Write(fc.Chunk); err != nil {
 				logger.Warnf("write file err: %v", err)
-				file.Close()
+				f.Close()
 				return
 			}
+		}
+		if fc.Last {
+			f.Close()
+			logger.Infof("file received finished: %s", path)
+			return
 		}
 	}
 }

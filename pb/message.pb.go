@@ -24,10 +24,12 @@ const (
 type CommandType int32
 
 const (
-	CommandType_UNKNOWN     CommandType = 0
-	CommandType_RESTART     CommandType = 1
-	CommandType_RUN_SHELL   CommandType = 2
-	CommandType_UPLOAD_FILE CommandType = 3
+	CommandType_UNKNOWN            CommandType = 0
+	CommandType_RESTART            CommandType = 1
+	CommandType_RUN_SHELL          CommandType = 2
+	CommandType_UPLOAD_FILE        CommandType = 3
+	CommandType_START_PORT_FORWARD CommandType = 4
+	CommandType_STOP_PORT_FORWARD  CommandType = 5
 )
 
 // Enum value maps for CommandType.
@@ -37,12 +39,16 @@ var (
 		1: "RESTART",
 		2: "RUN_SHELL",
 		3: "UPLOAD_FILE",
+		4: "START_PORT_FORWARD",
+		5: "STOP_PORT_FORWARD",
 	}
 	CommandType_value = map[string]int32{
-		"UNKNOWN":     0,
-		"RESTART":     1,
-		"RUN_SHELL":   2,
-		"UPLOAD_FILE": 3,
+		"UNKNOWN":            0,
+		"RESTART":            1,
+		"RUN_SHELL":          2,
+		"UPLOAD_FILE":        3,
+		"START_PORT_FORWARD": 4,
+		"STOP_PORT_FORWARD":  5,
 	}
 )
 
@@ -73,6 +79,66 @@ func (CommandType) EnumDescriptor() ([]byte, []int) {
 	return file_message_proto_rawDescGZIP(), []int{0}
 }
 
+type PortForward struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ReqId         string                 `protobuf:"bytes,1,opt,name=req_id,json=reqId,proto3" json:"req_id,omitempty"`
+	Proto         string                 `protobuf:"bytes,2,opt,name=proto,proto3" json:"proto,omitempty"`                             // tcp
+	TargetAddr    string                 `protobuf:"bytes,3,opt,name=target_addr,json=targetAddr,proto3" json:"target_addr,omitempty"` // agent target address 127.0.0.1:9000
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PortForward) Reset() {
+	*x = PortForward{}
+	mi := &file_message_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PortForward) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PortForward) ProtoMessage() {}
+
+func (x *PortForward) ProtoReflect() protoreflect.Message {
+	mi := &file_message_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PortForward.ProtoReflect.Descriptor instead.
+func (*PortForward) Descriptor() ([]byte, []int) {
+	return file_message_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *PortForward) GetReqId() string {
+	if x != nil {
+		return x.ReqId
+	}
+	return ""
+}
+
+func (x *PortForward) GetProto() string {
+	if x != nil {
+		return x.Proto
+	}
+	return ""
+}
+
+func (x *PortForward) GetTargetAddr() string {
+	if x != nil {
+		return x.TargetAddr
+	}
+	return ""
+}
+
 type Register struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -83,7 +149,7 @@ type Register struct {
 
 func (x *Register) Reset() {
 	*x = Register{}
-	mi := &file_message_proto_msgTypes[0]
+	mi := &file_message_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -95,7 +161,7 @@ func (x *Register) String() string {
 func (*Register) ProtoMessage() {}
 
 func (x *Register) ProtoReflect() protoreflect.Message {
-	mi := &file_message_proto_msgTypes[0]
+	mi := &file_message_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -108,7 +174,7 @@ func (x *Register) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Register.ProtoReflect.Descriptor instead.
 func (*Register) Descriptor() ([]byte, []int) {
-	return file_message_proto_rawDescGZIP(), []int{0}
+	return file_message_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *Register) GetId() string {
@@ -135,7 +201,7 @@ type Heartbeat struct {
 
 func (x *Heartbeat) Reset() {
 	*x = Heartbeat{}
-	mi := &file_message_proto_msgTypes[1]
+	mi := &file_message_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -147,7 +213,7 @@ func (x *Heartbeat) String() string {
 func (*Heartbeat) ProtoMessage() {}
 
 func (x *Heartbeat) ProtoReflect() protoreflect.Message {
-	mi := &file_message_proto_msgTypes[1]
+	mi := &file_message_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -160,7 +226,7 @@ func (x *Heartbeat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Heartbeat.ProtoReflect.Descriptor instead.
 func (*Heartbeat) Descriptor() ([]byte, []int) {
-	return file_message_proto_rawDescGZIP(), []int{1}
+	return file_message_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *Heartbeat) GetId() string {
@@ -187,7 +253,7 @@ type Message struct {
 
 func (x *Message) Reset() {
 	*x = Message{}
-	mi := &file_message_proto_msgTypes[2]
+	mi := &file_message_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -199,7 +265,7 @@ func (x *Message) String() string {
 func (*Message) ProtoMessage() {}
 
 func (x *Message) ProtoReflect() protoreflect.Message {
-	mi := &file_message_proto_msgTypes[2]
+	mi := &file_message_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -212,7 +278,7 @@ func (x *Message) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Message.ProtoReflect.Descriptor instead.
 func (*Message) Descriptor() ([]byte, []int) {
-	return file_message_proto_rawDescGZIP(), []int{2}
+	return file_message_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *Message) GetFrom() string {
@@ -240,7 +306,7 @@ type Command struct {
 
 func (x *Command) Reset() {
 	*x = Command{}
-	mi := &file_message_proto_msgTypes[3]
+	mi := &file_message_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -252,7 +318,7 @@ func (x *Command) String() string {
 func (*Command) ProtoMessage() {}
 
 func (x *Command) ProtoReflect() protoreflect.Message {
-	mi := &file_message_proto_msgTypes[3]
+	mi := &file_message_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -265,7 +331,7 @@ func (x *Command) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Command.ProtoReflect.Descriptor instead.
 func (*Command) Descriptor() ([]byte, []int) {
-	return file_message_proto_rawDescGZIP(), []int{3}
+	return file_message_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *Command) GetType() CommandType {
@@ -301,7 +367,7 @@ type CommandResult struct {
 
 func (x *CommandResult) Reset() {
 	*x = CommandResult{}
-	mi := &file_message_proto_msgTypes[4]
+	mi := &file_message_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -313,7 +379,7 @@ func (x *CommandResult) String() string {
 func (*CommandResult) ProtoMessage() {}
 
 func (x *CommandResult) ProtoReflect() protoreflect.Message {
-	mi := &file_message_proto_msgTypes[4]
+	mi := &file_message_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -326,7 +392,7 @@ func (x *CommandResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommandResult.ProtoReflect.Descriptor instead.
 func (*CommandResult) Descriptor() ([]byte, []int) {
-	return file_message_proto_rawDescGZIP(), []int{4}
+	return file_message_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *CommandResult) GetTargetId() string {
@@ -369,7 +435,7 @@ type FileChunk struct {
 
 func (x *FileChunk) Reset() {
 	*x = FileChunk{}
-	mi := &file_message_proto_msgTypes[5]
+	mi := &file_message_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -381,7 +447,7 @@ func (x *FileChunk) String() string {
 func (*FileChunk) ProtoMessage() {}
 
 func (x *FileChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_message_proto_msgTypes[5]
+	mi := &file_message_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -394,7 +460,7 @@ func (x *FileChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileChunk.ProtoReflect.Descriptor instead.
 func (*FileChunk) Descriptor() ([]byte, []int) {
-	return file_message_proto_rawDescGZIP(), []int{5}
+	return file_message_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *FileChunk) GetTransferId() string {
@@ -435,6 +501,7 @@ type Envelope struct {
 	//	*Envelope_Command
 	//	*Envelope_Result
 	//	*Envelope_FileChunk
+	//	*Envelope_PortForward
 	Payload       isEnvelope_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -442,7 +509,7 @@ type Envelope struct {
 
 func (x *Envelope) Reset() {
 	*x = Envelope{}
-	mi := &file_message_proto_msgTypes[6]
+	mi := &file_message_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -454,7 +521,7 @@ func (x *Envelope) String() string {
 func (*Envelope) ProtoMessage() {}
 
 func (x *Envelope) ProtoReflect() protoreflect.Message {
-	mi := &file_message_proto_msgTypes[6]
+	mi := &file_message_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -467,7 +534,7 @@ func (x *Envelope) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Envelope.ProtoReflect.Descriptor instead.
 func (*Envelope) Descriptor() ([]byte, []int) {
-	return file_message_proto_rawDescGZIP(), []int{6}
+	return file_message_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Envelope) GetPayload() isEnvelope_Payload {
@@ -531,6 +598,15 @@ func (x *Envelope) GetFileChunk() *FileChunk {
 	return nil
 }
 
+func (x *Envelope) GetPortForward() *PortForward {
+	if x != nil {
+		if x, ok := x.Payload.(*Envelope_PortForward); ok {
+			return x.PortForward
+		}
+	}
+	return nil
+}
+
 type isEnvelope_Payload interface {
 	isEnvelope_Payload()
 }
@@ -559,6 +635,10 @@ type Envelope_FileChunk struct {
 	FileChunk *FileChunk `protobuf:"bytes,6,opt,name=file_chunk,json=fileChunk,proto3,oneof"`
 }
 
+type Envelope_PortForward struct {
+	PortForward *PortForward `protobuf:"bytes,7,opt,name=port_forward,json=portForward,proto3,oneof"`
+}
+
 func (*Envelope_Register) isEnvelope_Payload() {}
 
 func (*Envelope_Heartbeat) isEnvelope_Payload() {}
@@ -571,11 +651,18 @@ func (*Envelope_Result) isEnvelope_Payload() {}
 
 func (*Envelope_FileChunk) isEnvelope_Payload() {}
 
+func (*Envelope_PortForward) isEnvelope_Payload() {}
+
 var File_message_proto protoreflect.FileDescriptor
 
 const file_message_proto_rawDesc = "" +
 	"\n" +
-	"\rmessage.proto\x12\x02pb\"0\n" +
+	"\rmessage.proto\x12\x02pb\"[\n" +
+	"\vPortForward\x12\x15\n" +
+	"\x06req_id\x18\x01 \x01(\tR\x05reqId\x12\x14\n" +
+	"\x05proto\x18\x02 \x01(\tR\x05proto\x12\x1f\n" +
+	"\vtarget_addr\x18\x03 \x01(\tR\n" +
+	"targetAddr\"0\n" +
 	"\bRegister\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05token\x18\x02 \x01(\tR\x05token\"+\n" +
@@ -599,7 +686,7 @@ const file_message_proto_rawDesc = "" +
 	"transferId\x12\x14\n" +
 	"\x05chunk\x18\x02 \x01(\fR\x05chunk\x12\x12\n" +
 	"\x04last\x18\x03 \x01(\bR\x04last\x12\x1a\n" +
-	"\bfilename\x18\x04 \x01(\tR\bfilename\"\x9f\x02\n" +
+	"\bfilename\x18\x04 \x01(\tR\bfilename\"\xd5\x02\n" +
 	"\bEnvelope\x12*\n" +
 	"\bregister\x18\x01 \x01(\v2\f.pb.RegisterH\x00R\bregister\x12-\n" +
 	"\theartbeat\x18\x02 \x01(\v2\r.pb.HeartbeatH\x00R\theartbeat\x12'\n" +
@@ -607,13 +694,16 @@ const file_message_proto_rawDesc = "" +
 	"\acommand\x18\x04 \x01(\v2\v.pb.CommandH\x00R\acommand\x12+\n" +
 	"\x06result\x18\x05 \x01(\v2\x11.pb.CommandResultH\x00R\x06result\x12.\n" +
 	"\n" +
-	"file_chunk\x18\x06 \x01(\v2\r.pb.FileChunkH\x00R\tfileChunkB\t\n" +
-	"\apayload*G\n" +
+	"file_chunk\x18\x06 \x01(\v2\r.pb.FileChunkH\x00R\tfileChunk\x124\n" +
+	"\fport_forward\x18\a \x01(\v2\x0f.pb.PortForwardH\x00R\vportForwardB\t\n" +
+	"\apayload*v\n" +
 	"\vCommandType\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\v\n" +
 	"\aRESTART\x10\x01\x12\r\n" +
 	"\tRUN_SHELL\x10\x02\x12\x0f\n" +
-	"\vUPLOAD_FILE\x10\x03B\rZ\v/cpe-box/pbb\x06proto3"
+	"\vUPLOAD_FILE\x10\x03\x12\x16\n" +
+	"\x12START_PORT_FORWARD\x10\x04\x12\x15\n" +
+	"\x11STOP_PORT_FORWARD\x10\x05B\rZ\v/cpe-box/pbb\x06proto3"
 
 var (
 	file_message_proto_rawDescOnce sync.Once
@@ -628,30 +718,32 @@ func file_message_proto_rawDescGZIP() []byte {
 }
 
 var file_message_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_message_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_message_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_message_proto_goTypes = []any{
 	(CommandType)(0),      // 0: pb.CommandType
-	(*Register)(nil),      // 1: pb.Register
-	(*Heartbeat)(nil),     // 2: pb.Heartbeat
-	(*Message)(nil),       // 3: pb.Message
-	(*Command)(nil),       // 4: pb.Command
-	(*CommandResult)(nil), // 5: pb.CommandResult
-	(*FileChunk)(nil),     // 6: pb.FileChunk
-	(*Envelope)(nil),      // 7: pb.Envelope
+	(*PortForward)(nil),   // 1: pb.PortForward
+	(*Register)(nil),      // 2: pb.Register
+	(*Heartbeat)(nil),     // 3: pb.Heartbeat
+	(*Message)(nil),       // 4: pb.Message
+	(*Command)(nil),       // 5: pb.Command
+	(*CommandResult)(nil), // 6: pb.CommandResult
+	(*FileChunk)(nil),     // 7: pb.FileChunk
+	(*Envelope)(nil),      // 8: pb.Envelope
 }
 var file_message_proto_depIdxs = []int32{
 	0, // 0: pb.Command.type:type_name -> pb.CommandType
-	1, // 1: pb.Envelope.register:type_name -> pb.Register
-	2, // 2: pb.Envelope.heartbeat:type_name -> pb.Heartbeat
-	3, // 3: pb.Envelope.message:type_name -> pb.Message
-	4, // 4: pb.Envelope.command:type_name -> pb.Command
-	5, // 5: pb.Envelope.result:type_name -> pb.CommandResult
-	6, // 6: pb.Envelope.file_chunk:type_name -> pb.FileChunk
-	7, // [7:7] is the sub-list for method output_type
-	7, // [7:7] is the sub-list for method input_type
-	7, // [7:7] is the sub-list for extension type_name
-	7, // [7:7] is the sub-list for extension extendee
-	0, // [0:7] is the sub-list for field type_name
+	2, // 1: pb.Envelope.register:type_name -> pb.Register
+	3, // 2: pb.Envelope.heartbeat:type_name -> pb.Heartbeat
+	4, // 3: pb.Envelope.message:type_name -> pb.Message
+	5, // 4: pb.Envelope.command:type_name -> pb.Command
+	6, // 5: pb.Envelope.result:type_name -> pb.CommandResult
+	7, // 6: pb.Envelope.file_chunk:type_name -> pb.FileChunk
+	1, // 7: pb.Envelope.port_forward:type_name -> pb.PortForward
+	8, // [8:8] is the sub-list for method output_type
+	8, // [8:8] is the sub-list for method input_type
+	8, // [8:8] is the sub-list for extension type_name
+	8, // [8:8] is the sub-list for extension extendee
+	0, // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_message_proto_init() }
@@ -659,13 +751,14 @@ func file_message_proto_init() {
 	if File_message_proto != nil {
 		return
 	}
-	file_message_proto_msgTypes[6].OneofWrappers = []any{
+	file_message_proto_msgTypes[7].OneofWrappers = []any{
 		(*Envelope_Register)(nil),
 		(*Envelope_Heartbeat)(nil),
 		(*Envelope_Message)(nil),
 		(*Envelope_Command)(nil),
 		(*Envelope_Result)(nil),
 		(*Envelope_FileChunk)(nil),
+		(*Envelope_PortForward)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -673,7 +766,7 @@ func file_message_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_message_proto_rawDesc), len(file_message_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   7,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

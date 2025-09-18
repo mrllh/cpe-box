@@ -8,12 +8,15 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/hashicorp/yamux"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
@@ -37,6 +40,9 @@ var (
 	agents  = make(map[string]*AgentConn)
 	pending = make(map[string]chan *pb.CommandResult) // req_id -> chan
 	sugar   *zap.SugaredLogger
+
+	// forwards: key = fmt.Sprintf("%s:%d", agentID, remotePort)
+	forwards = make(map[string]net.Listener)
 )
 
 func main() {
@@ -70,6 +76,7 @@ func main() {
 	sugar.Infof("server listening on %s", *addr)
 
 	go acceptLoop(ln)
+	go startAPIServer(":8080")
 	console()
 }
 
@@ -345,6 +352,53 @@ func console() {
 			}
 			fmt.Printf("Result from %s (ok=%v):\n%s\n", agentID, res.Ok, res.Output)
 
+		case "port-forward":
+			if len(args) < 4 {
+				fmt.Println("usage: port-forward <agent-id> <remote-port> <agent-local-addr:port>")
+				continue
+			}
+			agentID := args[1]
+			remotePort, err := strconv.Atoi(args[2])
+			if err != nil {
+				fmt.Println("invalid remote-port:", args[2])
+				continue
+			}
+			targetAddr := args[3]
+			if err := startPortForwarding(agentID, remotePort, targetAddr); err != nil {
+				fmt.Printf("start port-forward err: %v\n", err)
+			} else {
+				fmt.Printf("Port-forward started on :%d -> %s (agent=%s)\n", remotePort, targetAddr, agentID)
+			}
+
+		case "list-forwards":
+			fl := listForwards()
+			if len(fl) == 0 {
+				fmt.Println("no forwards")
+			} else {
+				fmt.Println("forwards:")
+				for _, v := range fl {
+					fmt.Println(" -", v)
+				}
+			}
+
+		case "stop-port-forward":
+			// usage: stop-port-forward <agent-id> <remote-port>
+			if len(args) < 3 {
+				fmt.Println("usage: stop-port-forward <agent-id> <remote-port>")
+				continue
+			}
+			agentID := args[1]
+			p, err := strconv.Atoi(args[2])
+			if err != nil {
+				fmt.Println("invalid port:", args[2])
+				continue
+			}
+			if err := stopPortForwarding(agentID, p); err != nil {
+				fmt.Println("stop failed:", err)
+			} else {
+				fmt.Printf("stopped forward %s:%d\n", agentID, p)
+			}
+
 		default:
 			fmt.Println("Unknown command. Type 'help' for usage.")
 		}
@@ -473,6 +527,244 @@ func uploadFileNewStream(agentID, path string) error {
 	return nil
 }
 
+func startPortForwarding(agentID string, remotePort int, targetAddr string) error {
+	key := fmt.Sprintf("%s:%d", agentID, remotePort)
+
+	mu.Lock()
+	if _, exists := forwards[key]; exists {
+		mu.Unlock()
+		return fmt.Errorf("forward already exists for %s", key)
+	}
+	mu.Unlock()
+
+	listenAddr := fmt.Sprintf(":%d", remotePort)
+	ln, err := net.Listen("tcp", listenAddr)
+	if err != nil {
+		return fmt.Errorf("listen %s err: %w", listenAddr, err)
+	}
+
+	mu.Lock()
+	forwards[key] = ln
+	mu.Unlock()
+
+	go func() {
+		sugar.Infof("port-forward listener started %s -> %s (agent=%s)", listenAddr, targetAddr, agentID)
+		defer func() {
+			ln.Close()
+			mu.Lock()
+			delete(forwards, key)
+			mu.Unlock()
+			sugar.Infof("port-forward listener closed %s (agent=%s)", listenAddr, agentID)
+		}()
+
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				// if ln closed, Accept returns error
+				sugar.Warnf("accept on %s err: %v", listenAddr, err)
+				return
+			}
+			go func(c net.Conn) {
+				if err := forwardConnToAgent(agentID, c, targetAddr); err != nil {
+					sugar.Warnf("forwardConnToAgent err: %v", err)
+					c.Close()
+				}
+			}(conn)
+		}
+	}()
+
+	return nil
+}
+
+func forwardConnToAgent(agentID string, c net.Conn, targetAddr string) error {
+	mu.Lock()
+	ac, ok := agents[agentID]
+	mu.Unlock()
+	if !ok {
+		return fmt.Errorf("no such agent: %s", agentID)
+	}
+
+	// open new stream on this agent's session
+	stream, err := ac.session.Open()
+	if err != nil {
+		return fmt.Errorf("open stream to agent err: %w", err)
+	}
+	// We will close stream at the end
+	// send PortForward metadata first
+	reqID := fmt.Sprintf("%d", time.Now().UnixNano())
+	pf := &pb.PortForward{
+		ReqId:      reqID,
+		Proto:      "tcp",
+		TargetAddr: targetAddr,
+	}
+	if err := framing.WriteMessage(stream, &pb.Envelope{Payload: &pb.Envelope_PortForward{PortForward: pf}}); err != nil {
+		stream.Close()
+		return fmt.Errorf("send portforward meta err: %w", err)
+	}
+
+	// Now start bidirectional copy between c and stream (raw bytes)
+	done := make(chan struct{}, 2)
+
+	// client -> stream
+	go func() {
+		_, err := io.Copy(stream, c)
+		if err != nil {
+			sugar.Warnf("copy client->stream err: %v", err)
+		}
+		// CloseWrite if available (yamux stream supports half-close?), we call Close to be safe
+		_ = stream.Close()
+		done <- struct{}{}
+	}()
+
+	// stream -> client
+	go func() {
+		_, err := io.Copy(c, stream)
+		if err != nil {
+			sugar.Warnf("copy stream->client err: %v", err)
+		}
+		c.Close()
+		done <- struct{}{}
+	}()
+
+	// wait for one side to finish
+	<-done
+	// ensure both closed
+	c.Close()
+	stream.Close()
+	return nil
+}
+
+func stopPortForwarding(agentID string, remotePort int) error {
+	key := fmt.Sprintf("%s:%d", agentID, remotePort)
+	mu.Lock()
+	ln, ok := forwards[key]
+	mu.Unlock()
+	if !ok {
+		return fmt.Errorf("no forward for %s", key)
+	}
+	// closing listener will cause Accept() to error and goroutine exit
+	err := ln.Close()
+	mu.Lock()
+	delete(forwards, key)
+	mu.Unlock()
+	return err
+}
+
+func listForwards() []string {
+	mu.Lock()
+	defer mu.Unlock()
+	res := make([]string, 0, len(forwards))
+	for k := range forwards {
+		res = append(res, k)
+	}
+	return res
+}
+
+func startAPIServer(addr string) {
+	r := gin.Default()
+
+	// simple token auth middleware if env AGENT_ADMIN_TOKEN set
+	adminToken := os.Getenv("AGENT_ADMIN_TOKEN")
+	if adminToken != "" {
+		r.Use(func(c *gin.Context) {
+			t := c.GetHeader("X-Admin-Token")
+			if t == "" {
+				t = c.Query("token")
+			}
+			if t != adminToken {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+				return
+			}
+			c.Next()
+		})
+	}
+
+	r.GET("/api/agents", func(c *gin.Context) {
+		mu.Lock()
+		ids := make([]string, 0, len(agents))
+		for id := range agents {
+			ids = append(ids, id)
+		}
+		mu.Unlock()
+		c.JSON(200, gin.H{"agents": ids})
+	})
+
+	type RunShellReq struct {
+		Cmd     string `json:"cmd"`
+		Timeout int    `json:"timeout"`
+	}
+	r.POST("/api/agents/:id/run", func(c *gin.Context) {
+		id := c.Param("id")
+		var body RunShellReq
+		if err := c.BindJSON(&body); err != nil {
+			c.JSON(400, gin.H{"error": "invalid json"})
+			return
+		}
+		if body.Cmd == "" {
+			c.JSON(400, gin.H{"error": "cmd required"})
+			return
+		}
+		res, err := sendRunShellSync(id, body.Cmd, body.Timeout)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, gin.H{"ok": res.Ok, "output": res.Output})
+	})
+
+	type PFStartReq struct {
+		RemotePort int    `json:"remote_port"`
+		TargetAddr string `json:"target_addr"`
+	}
+	r.POST("/api/agents/:id/port-forward", func(c *gin.Context) {
+		id := c.Param("id")
+		var body PFStartReq
+		if err := c.BindJSON(&body); err != nil {
+			c.JSON(400, gin.H{"error": "invalid json"})
+			return
+		}
+		if body.RemotePort <= 0 || body.TargetAddr == "" {
+			c.JSON(400, gin.H{"error": "remote_port and target_addr required"})
+			return
+		}
+		if err := startPortForwarding(id, body.RemotePort, body.TargetAddr); err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, gin.H{"status": "started"})
+	})
+
+	type PFStopReq struct {
+		RemotePort int `json:"remote_port"`
+	}
+	r.POST("/api/agents/:id/port-forward/stop", func(c *gin.Context) {
+		id := c.Param("id")
+		var body PFStopReq
+		if err := c.BindJSON(&body); err != nil {
+			c.JSON(400, gin.H{"error": "invalid json"})
+			return
+		}
+		if body.RemotePort <= 0 {
+			c.JSON(400, gin.H{"error": "remote_port required"})
+			return
+		}
+		if err := stopPortForwarding(id, body.RemotePort); err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, gin.H{"status": "stopped"})
+	})
+
+	r.GET("/api/forwards", func(c *gin.Context) {
+		c.JSON(200, gin.H{"forwards": listForwards()})
+	})
+
+	sugar.Infof("admin API listening on %s", addr)
+	if err := r.Run(addr); err != nil {
+		sugar.Fatalf("admin API run err: %v", err)
+	}
+}
+
 func printHelp() {
 	fmt.Println("Available commands:")
 	fmt.Println("  list                           - List all connected agents")
@@ -480,5 +772,8 @@ func printHelp() {
 	fmt.Println("  restart <agent-id>             - Restart a specific agent")
 	fmt.Println("  upload <agent-id> <filepath>   - Upload file to agent (new yamux stream)")
 	fmt.Println("  run-shell <agent-id> <cmd...>  - Run shell on agent and wait for result")
+	fmt.Println("  port-forward <agent-id> <remote-port> <agent-local-addr:port> - Start port forwarding")
+	fmt.Println("  stop-port-forward <agent-id> <remote-port> - Stop a port forward")
+	fmt.Println("  list-forwards                  - List active port forwards")
 	fmt.Println("  help                           - Show this help")
 }

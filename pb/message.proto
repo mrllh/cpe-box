@@ -9,7 +9,17 @@ enum CommandType {
   RESTART = 1;
   RUN_SHELL = 2;
   UPLOAD_FILE = 3;
+  START_PORT_FORWARD = 4;
+  STOP_PORT_FORWARD = 5;
 }
+
+message PortForward {
+  string req_id = 1;
+  string proto = 2;         // tcp
+  string target_addr = 3;   // agent target address 127.0.0.1:9000
+}
+
+
 
 message Register {
   string id = 1;
@@ -54,5 +64,6 @@ message Envelope {
     Command command = 4;
     CommandResult result = 5;
     FileChunk file_chunk = 6;
+    PortForward port_forward = 7;
   }
 }
