@@ -47,6 +47,27 @@ var (
 	forwards = make(map[string]*Forward)
 )
 
+const (
+	DefaultForwardMaxConns = 1
+)
+
+type TransferRecord struct {
+	TransferID     string    `json:"transfer_id"`
+	AgentID        string    `json:"agent"`
+	Ok             bool      `json:"ok"`
+	Received       int64     `json:"received"`
+	Expected       int64     `json:"expected"`
+	Sha256         string    `json:"sha256"`
+	Note           string    `json:"note"`
+	AgentTimestamp int64     `json:"agent_timestamp"`
+	ServerRecvTime time.Time `json:"server_recv_time"`
+}
+
+var (
+	transfersMu sync.Mutex
+	transfers   = make(map[string]*TransferRecord) // key = transfer_id
+)
+
 func main() {
 	addr := flag.String("addr", ":9999", "listen address")
 	tlsCert := flag.String("tls-cert", "", "tls cert path")
@@ -159,9 +180,9 @@ func handleStream(stream net.Conn, session *yamux.Session) {
 		ac.lastSeen = time.Now()
 		switch x := env.Payload.(type) {
 		case *pb.Envelope_Heartbeat:
-			// ignore or update metrics
+			// TODO
 		case *pb.Envelope_Message:
-			sugar.Infof("message from %s: %s", id, x.Message.Body)
+			processAgentMessage(id, x.Message.Body)
 		case *pb.Envelope_Result:
 			handleCommandResult(x.Result)
 		case *pb.Envelope_FileChunk:
@@ -457,6 +478,48 @@ func sendMessage(agentID, text string) {
 	ac.sendCh <- env
 }
 
+func processAgentMessage(agentID string, body string) {
+	// try parse JSON and look for type == file_transfer_result
+	var m map[string]interface{}
+	if err := json.Unmarshal([]byte(body), &m); err != nil {
+		sugar.Infof("message from %s: %s", agentID, body)
+		return
+	}
+	t, _ := m["type"].(string)
+	if t == "file_transfer_result" {
+		// extract fields safely
+		transferID, _ := m["transfer_id"].(string)
+		ok, _ := m["ok"].(bool)
+		recF, _ := m["received"].(float64)
+		expF, _ := m["expected"].(float64)
+		sha, _ := m["sha256"].(string)
+		note, _ := m["note"].(string)
+		tsF, _ := m["timestamp"].(float64)
+
+		rec := &TransferRecord{
+			TransferID:     transferID,
+			AgentID:        agentID,
+			Ok:             ok,
+			Received:       int64(recF),
+			Expected:       int64(expF),
+			Sha256:         sha,
+			Note:           note,
+			AgentTimestamp: int64(tsF),
+			ServerRecvTime: time.Now(),
+		}
+		// store
+		transfersMu.Lock()
+		transfers[transferID] = rec
+		transfersMu.Unlock()
+
+		sugar.Infof("Recorded transfer result: id=%s agent=%s ok=%v received=%d expected=%d sha=%s",
+			transferID, agentID, ok, rec.Received, rec.Expected, rec.Sha256)
+		return
+	}
+	// fallback: log
+	sugar.Infof("message from %s: %s", agentID, body)
+}
+
 func uploadFileNewStream(agentID, path string) error {
 	// open file twice: once to compute hash, second to stream
 	fmeta, err := os.Open(path)
@@ -574,7 +637,7 @@ func startPortForwarding(agentID string, remotePort int, targetAddr string) erro
 		return fmt.Errorf("listen %s err: %w", listenAddr, err)
 	}
 
-	f := newForward(agentID, remotePort, targetAddr, ln)
+	f := newForward(agentID, remotePort, targetAddr, ln, DefaultForwardMaxConns)
 
 	mu.Lock()
 	forwards[key] = f
@@ -596,6 +659,19 @@ func startPortForwarding(agentID string, remotePort int, targetAddr string) erro
 				sugar.Warnf("accept on %s err: %v", listenAddr, err)
 				return
 			}
+
+			// check max connections
+			f.mu.Lock()
+			active := len(f.Conns)
+			max := f.MaxConns
+			f.mu.Unlock()
+			if max > 0 && active >= max {
+				sugar.Warnf("refusing new connection: forward %s reached maxConns=%d active=%d", key, max, active)
+				// politely close connection (could also write TCP reset)
+				_ = conn.Close()
+				continue
+			}
+
 			go func(c net.Conn) {
 				if err := forwardConnToAgent(key, agentID, c, targetAddr); err != nil {
 					sugar.Warnf("forwardConnToAgent err: %v", err)
@@ -706,6 +782,7 @@ type ForwardInfo struct {
 	TargetAddr      string    `json:"target_addr"`
 	StartedAt       time.Time `json:"started_at"`
 	ActiveConnCount int       `json:"active_conn_count"`
+	MaxConns        int       `json:"max_conns"`
 }
 
 func listForwards() []ForwardInfo {
@@ -722,6 +799,7 @@ func listForwards() []ForwardInfo {
 			TargetAddr:      f.TargetAddr,
 			StartedAt:       f.StartedAt,
 			ActiveConnCount: count,
+			MaxConns:        f.MaxConns,
 		}
 		// optionally include key
 		_ = k
@@ -829,6 +907,28 @@ func startAPIServer(addr string) {
 		c.JSON(200, gin.H{"forwards": listForwards()})
 	})
 
+	r.GET("/api/transfers", func(c *gin.Context) {
+		transfersMu.Lock()
+		list := make([]*TransferRecord, 0, len(transfers))
+		for _, v := range transfers {
+			list = append(list, v)
+		}
+		transfersMu.Unlock()
+		c.JSON(200, gin.H{"transfers": list})
+	})
+
+	r.GET("/api/transfers/:id", func(c *gin.Context) {
+		id := c.Param("id")
+		transfersMu.Lock()
+		rec, ok := transfers[id]
+		transfersMu.Unlock()
+		if !ok {
+			c.JSON(404, gin.H{"error": "not found"})
+			return
+		}
+		c.JSON(200, rec)
+	})
+
 	sugar.Infof("admin API listening on %s", addr)
 	if err := r.Run(addr); err != nil {
 		sugar.Fatalf("admin API run err: %v", err)
@@ -845,6 +945,8 @@ func printHelp() {
 	fmt.Println("  port-forward <agent-id> <remote-port> <agent-local-addr:port> - Start port forwarding")
 	fmt.Println("  stop-port-forward <agent-id> <remote-port> - Stop a port forward")
 	fmt.Println("  list-forwards                  - List active port forwards")
+	// fmt.Println("  list-transfers                 - List all transfer records")
+	// fmt.Println("  transfer-info <transfer-id>    - Get info for a specific transfer")
 	fmt.Println("  help                           - Show this help")
 }
 
@@ -860,10 +962,11 @@ type Forward struct {
 	Listener   net.Listener
 	Conns      map[string]*ForwardConn // key = ext.RemoteAddr().String()
 	StartedAt  time.Time
+	MaxConns   int
 	mu         sync.Mutex
 }
 
-func newForward(agentID string, remotePort int, targetAddr string, ln net.Listener) *Forward {
+func newForward(agentID string, remotePort int, targetAddr string, ln net.Listener, maxConns int) *Forward {
 	return &Forward{
 		AgentID:    agentID,
 		RemotePort: remotePort,
@@ -871,6 +974,7 @@ func newForward(agentID string, remotePort int, targetAddr string, ln net.Listen
 		Listener:   ln,
 		Conns:      make(map[string]*ForwardConn),
 		StartedAt:  time.Now(),
+		MaxConns:   maxConns,
 	}
 }
 

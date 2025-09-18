@@ -404,7 +404,6 @@ func handleFileStreamFramed(stream net.Conn, first *pb.FileChunk) {
 		}
 	}
 
-	// final verification
 	// final verification (after computing calcHex and received)
 	calcSum := h.Sum(nil)
 	calcHex := hex.EncodeToString(calcSum)
@@ -435,7 +434,6 @@ func handleFileStreamFramed(stream net.Conn, first *pb.FileChunk) {
 }
 
 func reportFileTransferStatus(transferID string, ok bool, received int64, expected int64, sha256hex string, note string) error {
-	// build JSON body
 	body := map[string]interface{}{
 		"type":        "file_transfer_result",
 		"transfer_id": transferID,
@@ -450,12 +448,20 @@ func reportFileTransferStatus(transferID string, ok bool, received int64, expect
 	env := &pb.Envelope{Payload: &pb.Envelope_Message{Message: &pb.Message{From: "agent", Body: string(bs)}}}
 
 	ctrlStreamMu.Lock()
-	defer ctrlStreamMu.Unlock()
-	if ctrlStream == nil {
-		// no control stream available
-		return fmt.Errorf("no control stream to server")
+	s := ctrlStream
+	ctrlStreamMu.Unlock()
+
+	if s == nil {
+		logger.Warnf("no control stream to server; not saving report (feature removed): transfer=%s", transferID)
+		return fmt.Errorf("no control stream")
 	}
-	if err := framing.WriteMessage(ctrlStream, env); err != nil {
+
+	// Attempt send; log on error but don't persist
+	ctrlStreamMu.Lock()
+	err := framing.WriteMessage(s, env)
+	ctrlStreamMu.Unlock()
+	if err != nil {
+		logger.Warnf("failed to send file transfer status to server (not saved): %v", err)
 		return fmt.Errorf("failed to send file transfer status: %w", err)
 	}
 	logger.Infof("reported transfer %s status ok=%v to server", transferID, ok)
