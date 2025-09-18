@@ -54,6 +54,9 @@ message FileChunk {
   bytes chunk = 2;
   bool last = 3;
   string filename = 4;
+
+  int64 total_size = 5;
+  string sha256 = 6;
 }
 
 message Envelope {

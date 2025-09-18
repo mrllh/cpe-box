@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -12,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/hashicorp/yamux"
@@ -26,6 +29,11 @@ const defaultServerAddr = "127.0.0.1:9999"
 var (
 	agentID string
 	logger  *zap.SugaredLogger
+)
+
+var (
+	ctrlStreamMu sync.Mutex
+	ctrlStream   net.Conn
 )
 
 func dialServer(addr string) (net.Conn, error) {
@@ -102,6 +110,18 @@ func main() {
 		logger.Fatalf("open stream err: %v", err)
 	}
 	defer stream.Close()
+
+	ctrlStreamMu.Lock()
+	ctrlStream = stream
+	ctrlStreamMu.Unlock()
+	defer func() {
+		ctrlStreamMu.Lock()
+		if ctrlStream != nil {
+			_ = ctrlStream.Close()
+			ctrlStream = nil
+		}
+		ctrlStreamMu.Unlock()
+	}()
 
 	// register (include optional token)
 	token := os.Getenv("AGENT_TOKEN")
@@ -309,39 +329,41 @@ func handleIncomingStream(stream net.Conn) {
 }
 
 func handleFileStreamFramed(stream net.Conn, first *pb.FileChunk) {
-	// first chunk might be meta (no bytes) or bytes
+	// first is meta (may have Chunk==nil)
 	transferID := first.TransferId
 	filename := first.Filename
+	expectedSize := first.TotalSize
+	expectedSha := first.Sha256
 
 	path := filepath.Join("/tmp", transferID+"_"+filename)
-	var f *os.File
-	if first.Last {
-		// zero-length file
-		_ = os.WriteFile(path, nil, 0644)
-		logger.Infof("received zero-length file: %s", path)
+	logger.Infof("Receiving file transfer %s -> %s expected_size=%d sha256=%s", transferID, path, expectedSize, expectedSha)
+
+	// create file (truncate if exists)
+	f, err := os.Create(path)
+	if err != nil {
+		logger.Warnf("create file err: %v", err)
 		return
 	}
-	// if first chunk contains bytes, write them
+	defer f.Close()
+
+	// set up sha256 calculator
+	h := sha256.New()
+	received := int64(0)
+	chunkIdx := 0
+
+	// If first chunk had bytes (unlikely for meta), write them
 	if len(first.Chunk) > 0 {
-		var err error
-		f, err = os.Create(path)
-		if err != nil {
-			logger.Warnf("create file err: %v", err)
-			return
-		}
 		if _, err := f.Write(first.Chunk); err != nil {
-			logger.Warnf("write chunk err: %v", err)
-			f.Close()
+			logger.Warnf("write initial chunk err: %v", err)
 			return
 		}
-	} else {
-		// create file to append rest
-		var err error
-		f, err = os.Create(path)
-		if err != nil {
-			logger.Warnf("create file err: %v", err)
+		if _, err := h.Write(first.Chunk); err != nil {
+			logger.Warnf("hash write err: %v", err)
 			return
 		}
+		received += int64(len(first.Chunk))
+		chunkIdx++
+		logger.Infof("Received initial chunk #%d size=%d transfer=%s progress=%d/%d", chunkIdx, len(first.Chunk), transferID, received, expectedSize)
 	}
 
 	// read remaining framed FileChunk messages until Last==true
@@ -349,30 +371,93 @@ func handleFileStreamFramed(stream net.Conn, first *pb.FileChunk) {
 		var env pb.Envelope
 		if err := framing.ReadMessage(stream, &env); err != nil {
 			if err == io.EOF {
-				logger.Infof("file stream closed")
+				logger.Infof("file stream closed for transfer %s", transferID)
 			} else {
 				logger.Warnf("read chunk err: %v", err)
 			}
-			f.Close()
-			return
+			break
 		}
 		fch, ok := env.Payload.(*pb.Envelope_FileChunk)
 		if !ok {
-			logger.Warnf("expected FileChunk on file stream")
+			logger.Warnf("expected FileChunk on file stream for transfer %s", transferID)
 			continue
 		}
 		fc := fch.FileChunk
+		if fc.Last {
+			logger.Infof("Received last marker for transfer %s", transferID)
+			break
+		}
 		if len(fc.Chunk) > 0 {
-			if _, err := f.Write(fc.Chunk); err != nil {
+			n, err := f.Write(fc.Chunk)
+			if err != nil || n != len(fc.Chunk) {
 				logger.Warnf("write file err: %v", err)
-				f.Close()
 				return
 			}
-		}
-		if fc.Last {
-			f.Close()
-			logger.Infof("file received finished: %s", path)
-			return
+			if _, err := h.Write(fc.Chunk); err != nil {
+				logger.Warnf("hash write err: %v", err)
+				return
+			}
+			received += int64(len(fc.Chunk))
+			chunkIdx++
+			// print per chunk
+			logger.Infof("Received chunk #%d size=%d transfer=%s progress=%d/%d", chunkIdx, len(fc.Chunk), transferID, received, expectedSize)
 		}
 	}
+
+	// final verification
+	// final verification (after computing calcHex and received)
+	calcSum := h.Sum(nil)
+	calcHex := hex.EncodeToString(calcSum)
+	ok := false
+	if expectedSha != "" {
+		if calcHex == expectedSha && (expectedSize == 0 || received == expectedSize) {
+			logger.Infof("File transfer successful: %s size=%d sha256 match=%s", path, received, calcHex)
+			ok = true
+		} else {
+			logger.Warnf("File transfer verification FAILED for %s: expected size=%d got=%d, expected sha=%s got=%s",
+				path, expectedSize, received, expectedSha, calcHex)
+			ok = false
+		}
+	} else {
+		logger.Infof("File transfer finished (no hash provided): %s received=%d sha256=%s", path, received, calcHex)
+		ok = (expectedSize == 0 || received == expectedSize)
+	}
+
+	// send status back to server via control stream
+	note := ""
+	if !ok {
+		note = "verification failed"
+	}
+	if err := reportFileTransferStatus(transferID, ok, received, expectedSize, calcHex, note); err != nil {
+		logger.Warnf("failed to report transfer status to server: %v", err)
+	}
+
+}
+
+func reportFileTransferStatus(transferID string, ok bool, received int64, expected int64, sha256hex string, note string) error {
+	// build JSON body
+	body := map[string]interface{}{
+		"type":        "file_transfer_result",
+		"transfer_id": transferID,
+		"ok":          ok,
+		"received":    received,
+		"expected":    expected,
+		"sha256":      sha256hex,
+		"note":        note,
+		"timestamp":   time.Now().Unix(),
+	}
+	bs, _ := json.Marshal(body)
+	env := &pb.Envelope{Payload: &pb.Envelope_Message{Message: &pb.Message{From: "agent", Body: string(bs)}}}
+
+	ctrlStreamMu.Lock()
+	defer ctrlStreamMu.Unlock()
+	if ctrlStream == nil {
+		// no control stream available
+		return fmt.Errorf("no control stream to server")
+	}
+	if err := framing.WriteMessage(ctrlStream, env); err != nil {
+		return fmt.Errorf("failed to send file transfer status: %w", err)
+	}
+	logger.Infof("reported transfer %s status ok=%v to server", transferID, ok)
+	return nil
 }

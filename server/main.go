@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -42,7 +44,7 @@ var (
 	sugar   *zap.SugaredLogger
 
 	// forwards: key = fmt.Sprintf("%s:%d", agentID, remotePort)
-	forwards = make(map[string]net.Listener)
+	forwards = make(map[string]*Forward)
 )
 
 func main() {
@@ -377,7 +379,8 @@ func console() {
 			} else {
 				fmt.Println("forwards:")
 				for _, v := range fl {
-					fmt.Println(" -", v)
+					fmt.Printf(" - agent=%s remote_port=%d target=%s started=%s active_conn=%d\n",
+						v.AgentID, v.RemotePort, v.TargetAddr, v.StartedAt.Format(time.RFC3339), v.ActiveConnCount)
 				}
 			}
 
@@ -455,17 +458,35 @@ func sendMessage(agentID, text string) {
 }
 
 func uploadFileNewStream(agentID, path string) error {
+	// open file twice: once to compute hash, second to stream
+	fmeta, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	// compute total size and sha256
+	fi, _ := fmeta.Stat()
+	totalSize := fi.Size()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, fmeta); err != nil {
+		fmeta.Close()
+		return fmt.Errorf("compute sha256 err: %w", err)
+	}
+	sum := h.Sum(nil)
+	shaHex := hex.EncodeToString(sum)
+	fmeta.Close()
+
+	// reopen for streaming
 	f, err := os.Open(path)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
-	// stat, _ := f.Stat()
 	filename := filepath.Base(path)
 	transferID := fmt.Sprintf("%s-%d", agentID, time.Now().UnixNano())
 
-	// get agent session
+	// find agent session
 	mu.Lock()
 	ac, ok := agents[agentID]
 	mu.Unlock()
@@ -473,38 +494,47 @@ func uploadFileNewStream(agentID, path string) error {
 		return fmt.Errorf("no such agent: %s", agentID)
 	}
 
-	// open a new yamux stream to the agent
+	// open stream
 	stream, err := ac.session.Open()
 	if err != nil {
 		return fmt.Errorf("open stream err: %w", err)
 	}
 	defer stream.Close()
 
-	// send initial meta chunk (filename, transfer_id)
+	// send meta chunk (Chunk nil, but total_size & sha256 fields set)
 	meta := &pb.FileChunk{
 		TransferId: transferID,
 		Chunk:      nil,
 		Last:       false,
 		Filename:   filename,
+		TotalSize:  totalSize,
+		Sha256:     shaHex,
 	}
 	if err := framing.WriteMessage(stream, &pb.Envelope{Payload: &pb.Envelope_FileChunk{FileChunk: meta}}); err != nil {
 		return fmt.Errorf("send meta err: %w", err)
 	}
+	sugar.Infof("Sent meta for transfer %s filename=%s size=%d sha256=%s", transferID, filename, totalSize, shaHex)
 
-	// stream file in chunks
+	// send file in chunks
 	buf := make([]byte, 64*1024) // 64KB chunk
+	idx := 0
+	sent := int64(0)
 	for {
 		n, rerr := f.Read(buf)
 		if n > 0 {
+			chunkBytes := append([]byte(nil), buf[:n]...) // copy slice
 			chunk := &pb.FileChunk{
 				TransferId: transferID,
-				Chunk:      append([]byte(nil), buf[:n]...), // copy
+				Chunk:      chunkBytes,
 				Last:       false,
 				Filename:   filename,
 			}
 			if err := framing.WriteMessage(stream, &pb.Envelope{Payload: &pb.Envelope_FileChunk{FileChunk: chunk}}); err != nil {
 				return fmt.Errorf("write chunk err: %w", err)
 			}
+			idx++
+			sent += int64(n)
+			sugar.Infof("Sent chunk #%d size=%d transfer=%s progress=%d/%d", idx, n, transferID, sent, totalSize)
 		}
 		if rerr == io.EOF {
 			// send final marker
@@ -517,6 +547,7 @@ func uploadFileNewStream(agentID, path string) error {
 			if err := framing.WriteMessage(stream, &pb.Envelope{Payload: &pb.Envelope_FileChunk{FileChunk: last}}); err != nil {
 				return fmt.Errorf("write last err: %w", err)
 			}
+			sugar.Infof("Sent final marker for transfer %s chunks=%d total_sent=%d", transferID, idx, sent)
 			break
 		}
 		if rerr != nil {
@@ -543,8 +574,10 @@ func startPortForwarding(agentID string, remotePort int, targetAddr string) erro
 		return fmt.Errorf("listen %s err: %w", listenAddr, err)
 	}
 
+	f := newForward(agentID, remotePort, targetAddr, ln)
+
 	mu.Lock()
-	forwards[key] = ln
+	forwards[key] = f
 	mu.Unlock()
 
 	go func() {
@@ -560,14 +593,13 @@ func startPortForwarding(agentID string, remotePort int, targetAddr string) erro
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
-				// if ln closed, Accept returns error
 				sugar.Warnf("accept on %s err: %v", listenAddr, err)
 				return
 			}
 			go func(c net.Conn) {
-				if err := forwardConnToAgent(agentID, c, targetAddr); err != nil {
+				if err := forwardConnToAgent(key, agentID, c, targetAddr); err != nil {
 					sugar.Warnf("forwardConnToAgent err: %v", err)
-					c.Close()
+					_ = c.Close()
 				}
 			}(conn)
 		}
@@ -576,7 +608,15 @@ func startPortForwarding(agentID string, remotePort int, targetAddr string) erro
 	return nil
 }
 
-func forwardConnToAgent(agentID string, c net.Conn, targetAddr string) error {
+func forwardConnToAgent(key string, agentID string, c net.Conn, targetAddr string) error {
+	mu.Lock()
+	f, ok := forwards[key]
+	mu.Unlock()
+	if !ok {
+		return fmt.Errorf("no forward for key %s", key)
+	}
+
+	// open new stream on this agent's session
 	mu.Lock()
 	ac, ok := agents[agentID]
 	mu.Unlock()
@@ -584,12 +624,11 @@ func forwardConnToAgent(agentID string, c net.Conn, targetAddr string) error {
 		return fmt.Errorf("no such agent: %s", agentID)
 	}
 
-	// open new stream on this agent's session
 	stream, err := ac.session.Open()
 	if err != nil {
 		return fmt.Errorf("open stream to agent err: %w", err)
 	}
-	// We will close stream at the end
+
 	// send PortForward metadata first
 	reqID := fmt.Sprintf("%d", time.Now().UnixNano())
 	pf := &pb.PortForward{
@@ -602,7 +641,11 @@ func forwardConnToAgent(agentID string, c net.Conn, targetAddr string) error {
 		return fmt.Errorf("send portforward meta err: %w", err)
 	}
 
-	// Now start bidirectional copy between c and stream (raw bytes)
+	// register this connection in Forward
+	connID := fmt.Sprintf("%d", time.Now().UnixNano())
+	fc := &ForwardConn{Ext: c, Stream: stream}
+	f.addConn(connID, fc)
+
 	done := make(chan struct{}, 2)
 
 	// client -> stream
@@ -611,7 +654,7 @@ func forwardConnToAgent(agentID string, c net.Conn, targetAddr string) error {
 		if err != nil {
 			sugar.Warnf("copy client->stream err: %v", err)
 		}
-		// CloseWrite if available (yamux stream supports half-close?), we call Close to be safe
+		// try to close stream write side; Close will fire EOF to agent side
 		_ = stream.Close()
 		done <- struct{}{}
 	}()
@@ -622,40 +665,67 @@ func forwardConnToAgent(agentID string, c net.Conn, targetAddr string) error {
 		if err != nil {
 			sugar.Warnf("copy stream->client err: %v", err)
 		}
-		c.Close()
+		// close client connection
+		_ = c.Close()
 		done <- struct{}{}
 	}()
 
-	// wait for one side to finish
+	// wait for one goroutine to finish
 	<-done
-	// ensure both closed
-	c.Close()
-	stream.Close()
+
+	// cleanup: remove conn entry (also closes both sides again to be safe)
+	f.removeConn(connID)
 	return nil
 }
 
 func stopPortForwarding(agentID string, remotePort int) error {
 	key := fmt.Sprintf("%s:%d", agentID, remotePort)
 	mu.Lock()
-	ln, ok := forwards[key]
+	f, ok := forwards[key]
 	mu.Unlock()
 	if !ok {
 		return fmt.Errorf("no forward for %s", key)
 	}
-	// closing listener will cause Accept() to error and goroutine exit
-	err := ln.Close()
+	// first stop accepting new connections
+	if f.Listener != nil {
+		_ = f.Listener.Close()
+	}
+	// then close all active connections (streams + external conns)
+	f.closeAll()
+
 	mu.Lock()
 	delete(forwards, key)
 	mu.Unlock()
-	return err
+	sugar.Infof("stopped forward %s", key)
+	return nil
 }
 
-func listForwards() []string {
+type ForwardInfo struct {
+	AgentID         string    `json:"agent"`
+	RemotePort      int       `json:"remote_port"`
+	TargetAddr      string    `json:"target_addr"`
+	StartedAt       time.Time `json:"started_at"`
+	ActiveConnCount int       `json:"active_conn_count"`
+}
+
+func listForwards() []ForwardInfo {
 	mu.Lock()
 	defer mu.Unlock()
-	res := make([]string, 0, len(forwards))
-	for k := range forwards {
-		res = append(res, k)
+	res := []ForwardInfo{}
+	for k, f := range forwards {
+		f.mu.Lock()
+		count := len(f.Conns)
+		f.mu.Unlock()
+		info := ForwardInfo{
+			AgentID:         f.AgentID,
+			RemotePort:      f.RemotePort,
+			TargetAddr:      f.TargetAddr,
+			StartedAt:       f.StartedAt,
+			ActiveConnCount: count,
+		}
+		// optionally include key
+		_ = k
+		res = append(res, info)
 	}
 	return res
 }
@@ -776,4 +846,57 @@ func printHelp() {
 	fmt.Println("  stop-port-forward <agent-id> <remote-port> - Stop a port forward")
 	fmt.Println("  list-forwards                  - List active port forwards")
 	fmt.Println("  help                           - Show this help")
+}
+
+type ForwardConn struct {
+	Ext    net.Conn
+	Stream net.Conn
+}
+
+type Forward struct {
+	AgentID    string
+	RemotePort int
+	TargetAddr string
+	Listener   net.Listener
+	Conns      map[string]*ForwardConn // key = ext.RemoteAddr().String()
+	StartedAt  time.Time
+	mu         sync.Mutex
+}
+
+func newForward(agentID string, remotePort int, targetAddr string, ln net.Listener) *Forward {
+	return &Forward{
+		AgentID:    agentID,
+		RemotePort: remotePort,
+		TargetAddr: targetAddr,
+		Listener:   ln,
+		Conns:      make(map[string]*ForwardConn),
+		StartedAt:  time.Now(),
+	}
+}
+
+func (f *Forward) addConn(id string, fc *ForwardConn) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Conns[id] = fc
+}
+
+func (f *Forward) removeConn(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if c, ok := f.Conns[id]; ok {
+		// ensure both sides closed
+		_ = c.Ext.Close()
+		_ = c.Stream.Close()
+		delete(f.Conns, id)
+	}
+}
+
+func (f *Forward) closeAll() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for id, c := range f.Conns {
+		_ = c.Ext.Close()
+		_ = c.Stream.Close()
+		delete(f.Conns, id)
+	}
 }

@@ -429,6 +429,8 @@ type FileChunk struct {
 	Chunk         []byte                 `protobuf:"bytes,2,opt,name=chunk,proto3" json:"chunk,omitempty"`
 	Last          bool                   `protobuf:"varint,3,opt,name=last,proto3" json:"last,omitempty"`
 	Filename      string                 `protobuf:"bytes,4,opt,name=filename,proto3" json:"filename,omitempty"`
+	TotalSize     int64                  `protobuf:"varint,5,opt,name=total_size,json=totalSize,proto3" json:"total_size,omitempty"`
+	Sha256        string                 `protobuf:"bytes,6,opt,name=sha256,proto3" json:"sha256,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -487,6 +489,20 @@ func (x *FileChunk) GetLast() bool {
 func (x *FileChunk) GetFilename() string {
 	if x != nil {
 		return x.Filename
+	}
+	return ""
+}
+
+func (x *FileChunk) GetTotalSize() int64 {
+	if x != nil {
+		return x.TotalSize
+	}
+	return 0
+}
+
+func (x *FileChunk) GetSha256() string {
+	if x != nil {
+		return x.Sha256
 	}
 	return ""
 }
@@ -680,13 +696,16 @@ const file_message_proto_rawDesc = "" +
 	"\ttarget_id\x18\x01 \x01(\tR\btargetId\x12\x0e\n" +
 	"\x02ok\x18\x02 \x01(\bR\x02ok\x12\x16\n" +
 	"\x06output\x18\x03 \x01(\tR\x06output\x12\x15\n" +
-	"\x06req_id\x18\x04 \x01(\tR\x05reqId\"r\n" +
+	"\x06req_id\x18\x04 \x01(\tR\x05reqId\"\xa9\x01\n" +
 	"\tFileChunk\x12\x1f\n" +
 	"\vtransfer_id\x18\x01 \x01(\tR\n" +
 	"transferId\x12\x14\n" +
 	"\x05chunk\x18\x02 \x01(\fR\x05chunk\x12\x12\n" +
 	"\x04last\x18\x03 \x01(\bR\x04last\x12\x1a\n" +
-	"\bfilename\x18\x04 \x01(\tR\bfilename\"\xd5\x02\n" +
+	"\bfilename\x18\x04 \x01(\tR\bfilename\x12\x1d\n" +
+	"\n" +
+	"total_size\x18\x05 \x01(\x03R\ttotalSize\x12\x16\n" +
+	"\x06sha256\x18\x06 \x01(\tR\x06sha256\"\xd5\x02\n" +
 	"\bEnvelope\x12*\n" +
 	"\bregister\x18\x01 \x01(\v2\f.pb.RegisterH\x00R\bregister\x12-\n" +
 	"\theartbeat\x18\x02 \x01(\v2\r.pb.HeartbeatH\x00R\theartbeat\x12'\n" +
