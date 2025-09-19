@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -68,6 +69,20 @@ var (
 	transfers   = make(map[string]*TransferRecord) // key = transfer_id
 )
 
+type PortEntry struct {
+	Proto  string      `json:"proto"`
+	Laddr  string      `json:"laddr"`
+	Port   string      `json:"port"`
+	Pid    int32       `json:"pid"`
+	Family uint32      `json:"family"`
+	Raw    interface{} `json:"raw,omitempty"`
+}
+
+var (
+	portMapMu sync.Mutex
+	portMaps  = make(map[string][]PortEntry) // agentID -> []PortEntry
+)
+
 func main() {
 	addr := flag.String("addr", ":9999", "listen address")
 	tlsCert := flag.String("tls-cert", "", "tls cert path")
@@ -97,6 +112,12 @@ func main() {
 	}
 	defer ln.Close()
 	sugar.Infof("server listening on %s", *addr)
+
+	go func() {
+		if err := http.ListenAndServe("127.0.0.1:6060", nil); err != nil {
+			fmt.Printf("pprof server exit: %v\n", err)
+		}
+	}()
 
 	go acceptLoop(ln)
 	go startAPIServer(":8080")
@@ -478,6 +499,11 @@ func sendMessage(agentID, text string) {
 	ac.sendCh <- env
 }
 
+var (
+	metricsMu sync.Mutex
+	metrics   = make(map[string]map[string]interface{}) // key = agentID, value = map of metric name to value
+)
+
 func processAgentMessage(agentID string, body string) {
 	// try parse JSON and look for type == file_transfer_result
 	var m map[string]interface{}
@@ -486,7 +512,9 @@ func processAgentMessage(agentID string, body string) {
 		return
 	}
 	t, _ := m["type"].(string)
-	if t == "file_transfer_result" {
+
+	switch t {
+	case "file_transfer_result":
 		// extract fields safely
 		transferID, _ := m["transfer_id"].(string)
 		ok, _ := m["ok"].(bool)
@@ -514,10 +542,50 @@ func processAgentMessage(agentID string, body string) {
 
 		sugar.Infof("Recorded transfer result: id=%s agent=%s ok=%v received=%d expected=%d sha=%s",
 			transferID, agentID, ok, rec.Received, rec.Expected, rec.Sha256)
-		return
+
+	case "metrics":
+		metricsMu.Lock()
+		metrics[agentID] = m
+		metricsMu.Unlock()
+		sugar.Debugf("metrics from %s: %v", agentID, m)
+
+	case "port_map":
+		// parse ports array
+		arr, ok := m["ports"].([]interface{})
+		if !ok {
+			sugar.Warnf("invalid port_map payload from %s", agentID)
+			return
+		}
+		var list []PortEntry
+		for _, it := range arr {
+			mm, _ := it.(map[string]interface{})
+			if mm == nil {
+				continue
+			}
+			proto, _ := mm["proto"].(string)
+			laddr, _ := mm["laddr"].(string)
+			port, _ := mm["port"].(string)
+			pidF, _ := mm["pid"].(float64)
+			familyF, _ := mm["family"].(float64)
+
+			entry := PortEntry{
+				Proto:  proto,
+				Laddr:  laddr,
+				Port:   port,
+				Pid:    int32(pidF),
+				Family: uint32(familyF),
+				Raw:    mm["raw"],
+			}
+			list = append(list, entry)
+		}
+		portMapMu.Lock()
+		portMaps[agentID] = list
+		portMapMu.Unlock()
+		sugar.Debugf("Recorded port_map from %s entries=%d", agentID, len(list))
+
+	default:
+		sugar.Infof("message from %s: %s", agentID, body)
 	}
-	// fallback: log
-	sugar.Infof("message from %s: %s", agentID, body)
 }
 
 func uploadFileNewStream(agentID, path string) error {
@@ -927,6 +995,30 @@ func startAPIServer(addr string) {
 			return
 		}
 		c.JSON(200, rec)
+	})
+
+	r.GET("/api/agents/:id/metrics", func(c *gin.Context) {
+		id := c.Param("id")
+		metricsMu.Lock()
+		m, ok := metrics[id]
+		metricsMu.Unlock()
+		if !ok {
+			c.JSON(404, gin.H{"error": "no metrics"})
+			return
+		}
+		c.JSON(200, m)
+	})
+
+	r.GET("/api/agents/:id/ports", func(c *gin.Context) {
+		id := c.Param("id")
+		portMapMu.Lock()
+		list, ok := portMaps[id]
+		portMapMu.Unlock()
+		if !ok {
+			c.JSON(404, gin.H{"error": "not found"})
+			return
+		}
+		c.JSON(200, gin.H{"ports": list})
 	})
 
 	sugar.Infof("admin API listening on %s", addr)

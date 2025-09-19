@@ -14,10 +14,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/hashicorp/yamux"
+	"github.com/shirou/gopsutil/v3/cpu"
+	"github.com/shirou/gopsutil/v3/disk"
+	"github.com/shirou/gopsutil/v3/mem"
+	gopsnet "github.com/shirou/gopsutil/v3/net"
 	"go.uber.org/zap"
 
 	"cpe-box/internal/framing"
@@ -131,6 +136,9 @@ func main() {
 	}
 	logger.Infof("registered id=%s", agentID)
 
+	go metricsLoop()
+	go scanAndReportPortMap()
+
 	// read loop
 	for {
 		var env pb.Envelope
@@ -171,6 +179,101 @@ func supervisorLoop(udsPath string) {
 			time.Sleep(5 * time.Second)
 		}
 		conn.Close()
+	}
+}
+
+func metricsLoop() {
+	start := time.Now()
+	for {
+		time.Sleep(10 * time.Second)
+
+		cpuPerc, _ := cpu.Percent(0, false)
+		memStat, _ := mem.VirtualMemory()
+		diskStat, _ := disk.Usage("/")
+
+		uptime := int64(time.Since(start).Seconds())
+
+		body := map[string]interface{}{
+			"type":       "metrics",
+			"cpu":        cpuPerc[0],
+			"mem_used":   memStat.Used,
+			"mem_total":  memStat.Total,
+			"disk_used":  diskStat.Used,
+			"disk_total": diskStat.Total,
+			"uptime":     uptime,
+		}
+		bs, _ := json.Marshal(body)
+
+		env := &pb.Envelope{Payload: &pb.Envelope_Message{
+			Message: &pb.Message{From: agentID, Body: string(bs)},
+		}}
+
+		ctrlStreamMu.Lock()
+		s := ctrlStream
+		ctrlStreamMu.Unlock()
+		if s != nil {
+			_ = framing.WriteMessage(s, env)
+		}
+	}
+}
+
+func scanAndReportPortMap() {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		<-ticker.C
+
+		conns, err := gopsnet.Connections("inet")
+		if err != nil {
+			logger.Warnf("portmap: failed to get connections: %v", err)
+			continue
+		}
+
+		ports := make([]map[string]interface{}, 0, 8)
+		for _, c := range conns {
+			if c.Status != "LISTEN" {
+				continue
+			}
+
+			proto := "tcp"
+			laddr := c.Laddr.IP
+			if laddr == "" {
+				laddr = "0.0.0.0"
+			}
+			portStr := strconv.Itoa(int(c.Laddr.Port))
+
+			entry := map[string]interface{}{
+				"proto":  proto,
+				"laddr":  laddr,
+				"port":   portStr,
+				"pid":    c.Pid,
+				"family": c.Family,
+				"raw":    c, // optional: 原始结构用于排查
+			}
+			ports = append(ports, entry)
+		}
+
+		body := map[string]interface{}{
+			"type":      "port_map",
+			"ports":     ports,
+			"timestamp": time.Now().Unix(),
+		}
+		bs, _ := json.Marshal(body)
+		env := &pb.Envelope{Payload: &pb.Envelope_Message{Message: &pb.Message{From: agentID, Body: string(bs)}}}
+
+		ctrlStreamMu.Lock()
+		s := ctrlStream
+		ctrlStreamMu.Unlock()
+		if s == nil {
+			logger.Warnf("portmap: no control stream to server")
+			continue
+		}
+		if err := framing.WriteMessage(s, env); err != nil {
+			logger.Warnf("portmap: write failed: %v", err)
+			continue
+		}
+		logger.Infof("portmap: reported %d listen sockets", len(ports))
 	}
 }
 
