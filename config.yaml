@@ -1,0 +1,30 @@
+# config.yaml
+server:
+  listen_addr: ":9999"
+  api_addr: ":8080"
+  pprof_addr: "127.0.0.1:6060"
+  tls_cert: "/server/cert.pem"
+  tls_key: "server/key.pem"
+
+agent:
+  server_addr: "127.0.0.1:9999"
+  id: "agent-1"
+  token: ""
+  tls: false
+
+logging:
+  level: "info"
+  server_file: "/tmp/cpe-box-server.log"
+  agent_file: "/tmp/cpe-box-agent.log"
+  maxsize_mb: 100
+  maxbackups: 7
+  maxage_days: 14
+  compress: true
+
+forward:
+  default_max_conns: 1
+
+agent_defaults:
+  reports_dir: "/tmp/cpe_reports"
+  metrics_interval_sec: 10
+  portmap_interval_sec: 15

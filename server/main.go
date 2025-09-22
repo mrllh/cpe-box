@@ -22,11 +22,99 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/hashicorp/yamux"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"google.golang.org/protobuf/proto"
+	"gopkg.in/natefinch/lumberjack.v2"
+	"gopkg.in/yaml.v3"
 
 	"cpe-box/internal/framing"
 	"cpe-box/pb"
 )
+
+type Config struct {
+	Server struct {
+		ListenAddr string `yaml:"listen_addr"`
+		APIAddr    string `yaml:"api_addr"`
+		PprofAddr  string `yaml:"pprof_addr"`
+		TLSCert    string `yaml:"tls_cert"`
+		TLSKey     string `yaml:"tls_key"`
+	} `yaml:"server"`
+	Logging struct {
+		Level      string `yaml:"level"`
+		File       string `yaml:"file"`
+		MaxSizeMB  int    `yaml:"maxsize_mb"`
+		MaxBackups int    `yaml:"maxbackups"`
+		MaxAgeDays int    `yaml:"maxage_days"`
+		Compress   bool   `yaml:"compress"`
+	} `yaml:"logging"`
+	Forward struct {
+		DefaultMaxConns int `yaml:"default_max_conns"`
+	} `yaml:"forward"`
+	AgentDefault struct {
+		ReportsDir         string `yaml:"reports_dir"`
+		MetricsIntervalSec int    `yaml:"metrics_interval_sec"`
+		PortmapIntervalSec int    `yaml:"portmap_interval_sec"`
+	} `yaml:"agent_defaults"`
+}
+
+func loadConfig(path string) (*Config, error) {
+	cfg := &Config{}
+	cfg.Server.ListenAddr = ":9999"
+	cfg.Server.APIAddr = ":8080"
+	cfg.Server.PprofAddr = "127.0.0.1:6060"
+	cfg.Logging.Level = "info"
+	cfg.Logging.File = "/tmp/cpe-box-server.log"
+	cfg.Logging.MaxSizeMB = 100
+	cfg.Logging.MaxBackups = 7
+	cfg.Logging.MaxAgeDays = 14
+	cfg.Logging.Compress = true
+	cfg.Forward.DefaultMaxConns = 1
+	cfg.AgentDefault.ReportsDir = "/tmp/cpe-reports"
+	cfg.AgentDefault.MetricsIntervalSec = 10
+	cfg.AgentDefault.PortmapIntervalSec = 15
+
+	if path == "" {
+		return cfg, nil
+	}
+	bs, err := os.ReadFile(path)
+	if err != nil {
+		return cfg, err
+	}
+	if err := yaml.Unmarshal(bs, cfg); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
+func initLoggerWithRotation(path string, levelStr string, maxSizeMB, maxBackups, maxAgeDays int, compress bool) (*zap.SugaredLogger, func(), error) {
+	lumber := &lumberjack.Logger{
+		Filename:   path,
+		MaxSize:    maxSizeMB,
+		MaxBackups: maxBackups,
+		MaxAge:     maxAgeDays,
+		Compress:   compress,
+	}
+
+	var lvl zapcore.Level
+	if err := lvl.UnmarshalText([]byte(levelStr)); err != nil {
+		lvl = zapcore.InfoLevel
+	}
+
+	encoderCfg := zap.NewProductionEncoderConfig()
+	encoderCfg.TimeKey = "ts"
+	encoderCfg.EncodeTime = zapcore.ISO8601TimeEncoder
+
+	core := zapcore.NewCore(
+		zapcore.NewJSONEncoder(encoderCfg),
+		zapcore.NewMultiWriteSyncer(zapcore.AddSync(os.Stdout), zapcore.AddSync(lumber)),
+		lvl,
+	)
+
+	logger := zap.New(core, zap.AddCaller(), zap.AddStacktrace(zapcore.ErrorLevel))
+	sugar := logger.Sugar()
+	cleanup := func() { _ = logger.Sync() }
+	return sugar, cleanup, nil
+}
 
 type AgentConn struct {
 	id       string
@@ -84,17 +172,39 @@ var (
 )
 
 func main() {
-	addr := flag.String("addr", ":9999", "listen address")
-	tlsCert := flag.String("tls-cert", "", "tls cert path")
-	tlsKey := flag.String("tls-key", "", "tls key path")
+	// addr := flag.String("addr", "", "listen address")
+	// tlsCert := flag.String("tls-cert", "", "tls cert path")
+	// tlsKey := flag.String("tls-key", "", "tls key path")
+
+	cfgPath := flag.String("config", "config.yaml", "path to config yaml (optional)")
 	flag.Parse()
 
-	zl, _ := zap.NewProduction()
-	defer zl.Sync()
-	sugar = zl.Sugar()
+	cfg, err := loadConfig(*cfgPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "load config err: %v\n", err)
+		os.Exit(1)
+	}
+
+	addr := flag.String("addr", cfg.Server.ListenAddr, "listen address")
+	tlsCert := flag.String("tls-cert", cfg.Server.TLSCert, "tls cert path")
+	tlsKey := flag.String("tls-key", cfg.Server.TLSKey, "tls key path")
+
+	sugarLogger, cleanup, err := initLoggerWithRotation(
+		cfg.Logging.File,
+		cfg.Logging.Level,
+		cfg.Logging.MaxSizeMB,
+		cfg.Logging.MaxBackups,
+		cfg.Logging.MaxAgeDays,
+		cfg.Logging.Compress,
+	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "init logger err: %v\n", err)
+		os.Exit(1)
+	}
+	defer cleanup()
+	sugar = sugarLogger
 
 	var ln net.Listener
-	var err error
 	if *tlsCert != "" && *tlsKey != "" {
 		cert, lerr := tls.LoadX509KeyPair(*tlsCert, *tlsKey)
 		if lerr == nil {
@@ -114,13 +224,13 @@ func main() {
 	sugar.Infof("server listening on %s", *addr)
 
 	go func() {
-		if err := http.ListenAndServe("127.0.0.1:6060", nil); err != nil {
+		if err := http.ListenAndServe(cfg.Server.PprofAddr, nil); err != nil {
 			fmt.Printf("pprof server exit: %v\n", err)
 		}
 	}()
 
 	go acceptLoop(ln)
-	go startAPIServer(":8080")
+	go startAPIServer(cfg.Server.APIAddr)
 	console()
 }
 

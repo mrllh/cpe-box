@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"net"
 	"os"
@@ -20,8 +19,8 @@ var (
 )
 
 func main() {
-	flag.StringVar(&agentID, "id", "agent-123", "agent id")
-	flag.Parse()
+	// flag.StringVar(&agentID, "id", "agent-123", "agent id")
+	// flag.Parse()
 	socketPath := fmt.Sprintf("%s/cpe_%s.sock", socketDir, agentID)
 	_ = os.Remove(socketPath)
 	l, err := net.Listen("unix", socketPath)

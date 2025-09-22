@@ -24,6 +24,9 @@ import (
 	"github.com/shirou/gopsutil/v3/mem"
 	gopsnet "github.com/shirou/gopsutil/v3/net"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"gopkg.in/natefinch/lumberjack.v2"
+	"gopkg.in/yaml.v3"
 
 	"cpe-box/internal/framing"
 	"cpe-box/pb"
@@ -41,19 +44,91 @@ var (
 	ctrlStream   net.Conn
 )
 
-func dialServer(addr string) (net.Conn, error) {
-	useTLS := os.Getenv("AGENT_TLS") == "1" || os.Getenv("AGENT_TLS") == "true"
+type AgentConfig struct {
+	Server struct {
+		Addr  string `yaml:"server_addr"`
+		ID    string `yaml:"id"`
+		Token string `yaml:"token"`
+		TLS   bool   `yaml:"tls"`
+	} `yaml:"agent"`
+	Logging struct {
+		Level      string `yaml:"level"`
+		AgentFile  string `yaml:"agent_file"`
+		MaxSizeMB  int    `yaml:"maxsize_mb"`
+		MaxBackups int    `yaml:"maxbackups"`
+		MaxAgeDays int    `yaml:"maxage_days"`
+		Compress   bool   `yaml:"compress"`
+	} `yaml:"logging"`
+	AgentDefaults struct {
+		ReportsDir         string `yaml:"reports_dir"`
+		MetricsIntervalSec int    `yaml:"metrics_interval_sec"`
+		PortmapIntervalSec int    `yaml:"portmap_interval_sec"`
+	} `yaml:"agent_defaults"`
+}
+
+func loadAgentConfig(path string) (*AgentConfig, error) {
+	cfg := &AgentConfig{}
+	// defaults
+	cfg.Server.Addr = defaultServerAddr
+	cfg.Server.ID = "agent-default"
+	cfg.Logging.Level = "info"
+	cfg.Logging.AgentFile = "/tmp/cpe-box-agent.log"
+	cfg.Logging.MaxSizeMB = 50
+	cfg.Logging.MaxBackups = 3
+	cfg.Logging.MaxAgeDays = 7
+	cfg.Logging.Compress = true
+	cfg.AgentDefaults.ReportsDir = "/tmp/cpe_reports"
+	cfg.AgentDefaults.MetricsIntervalSec = 10
+	cfg.AgentDefaults.PortmapIntervalSec = 15
+
+	if path == "" {
+		return cfg, nil
+	}
+	bs, err := os.ReadFile(path)
+	if err != nil {
+		return cfg, err
+	}
+	if err := yaml.Unmarshal(bs, cfg); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
+func initLoggerWithRotationAgent(path string, levelStr string, maxSizeMB, maxBackups, maxAgeDays int, compress bool) (*zap.SugaredLogger, func(), error) {
+	lumber := &lumberjack.Logger{
+		Filename:   path,
+		MaxSize:    maxSizeMB,
+		MaxBackups: maxBackups,
+		MaxAge:     maxAgeDays,
+		Compress:   compress,
+	}
+	var lvl zapcore.Level
+	if err := lvl.UnmarshalText([]byte(levelStr)); err != nil {
+		lvl = zapcore.InfoLevel
+	}
+	encoderCfg := zap.NewProductionEncoderConfig()
+	encoderCfg.TimeKey = "ts"
+	encoderCfg.EncodeTime = zapcore.ISO8601TimeEncoder
+
+	core := zapcore.NewCore(
+		zapcore.NewJSONEncoder(encoderCfg),
+		zapcore.NewMultiWriteSyncer(zapcore.AddSync(os.Stdout), zapcore.AddSync(lumber)),
+		lvl,
+	)
+	logger := zap.New(core, zap.AddCaller(), zap.AddStacktrace(zapcore.ErrorLevel))
+	sugar := logger.Sugar()
+	cleanup := func() { _ = logger.Sync() }
+	return sugar, cleanup, nil
+}
+
+func dialServer(addr string, useTLS bool, tlsSkipVerify bool, caPath string) (net.Conn, error) {
 	if !useTLS {
 		return net.Dial("tcp", addr)
 	}
 
-	skipVerify := os.Getenv("AGENT_TLS_SKIP_VERIFY") == "1" || os.Getenv("AGENT_TLS_SKIP_VERIFY") == "true"
-	caPath := os.Getenv("AGENT_TLS_CA")
-
 	tlsConfig := &tls.Config{
-		InsecureSkipVerify: skipVerify,
+		InsecureSkipVerify: tlsSkipVerify,
 	}
-
 	if caPath != "" {
 		bs, err := os.ReadFile(caPath)
 		if err != nil {
@@ -75,12 +150,38 @@ func dialServer(addr string) (net.Conn, error) {
 }
 
 func main() {
-	flag.StringVar(&agentID, "id", "agent-123", "unique agent id")
+	cfgPath := flag.String("config", "../../config.yaml", "path to config yaml (optional)")
+	flag.StringVar(&agentID, "id", "", "unique agent id")
 	flag.Parse()
 
-	lg, _ := zap.NewProduction()
-	defer lg.Sync()
-	logger = lg.Sugar()
+	cfg, err := loadAgentConfig(*cfgPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "load config err: %v\n", err)
+		os.Exit(1)
+	}
+
+	if agentID == "" {
+		agentID = cfg.Server.ID
+	}
+
+	sugarLogger, cleanup, err := initLoggerWithRotationAgent(
+		cfg.Logging.AgentFile,
+		cfg.Logging.Level,
+		cfg.Logging.MaxSizeMB,
+		cfg.Logging.MaxBackups,
+		cfg.Logging.MaxAgeDays,
+		cfg.Logging.Compress,
+	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "init logger err: %v\n", err)
+		os.Exit(1)
+	}
+	defer cleanup()
+	logger = sugarLogger
+
+	if err := os.MkdirAll(cfg.AgentDefaults.ReportsDir, 0o700); err != nil {
+		logger.Fatalf("failed to create reports dir: %v", err)
+	}
 
 	udsPath := os.Getenv("CPE_AGENT_SOCK")
 	if udsPath == "" {
@@ -91,11 +192,16 @@ func main() {
 	go supervisorLoop(udsPath)
 
 	// dial server (TLS if configured via env)
-	serverAddr := os.Getenv("SERVER_ADDR")
-	if serverAddr == "" {
-		serverAddr = defaultServerAddr
+	serverAddr := cfg.Server.Addr
+	if env := os.Getenv("CPE_SERVER_ADDR"); env != "" {
+		serverAddr = env
 	}
-	conn, err := dialServer(serverAddr)
+	useTLS := cfg.Server.TLS
+	skipVerify := false
+	if os.Getenv("AGENT_TLS_SKIP_VERIFY") == "1" || os.Getenv("AGENT_TLS_SKIP_VERIFY") == "true" {
+		skipVerify = true
+	}
+	conn, err := dialServer(serverAddr, useTLS, skipVerify, os.Getenv("AGENT_TLS_CA"))
 	if err != nil {
 		logger.Fatalf("dial server err: %v", err)
 	}
@@ -129,15 +235,18 @@ func main() {
 	}()
 
 	// register (include optional token)
-	token := os.Getenv("AGENT_TOKEN")
+	token := cfg.Server.Token
 	reg := &pb.Envelope{Payload: &pb.Envelope_Register{Register: &pb.Register{Id: agentID, Token: token}}}
 	if err := framing.WriteMessage(stream, reg); err != nil {
 		logger.Fatalf("write register err: %v", err)
 	}
 	logger.Infof("registered id=%s", agentID)
 
-	go metricsLoop()
-	go scanAndReportPortMap()
+	metricsInterval := time.Duration(cfg.AgentDefaults.MetricsIntervalSec) * time.Second
+	portmapInterval := time.Duration(cfg.AgentDefaults.PortmapIntervalSec) * time.Second
+
+	go metricsLoopWithInterval(metricsInterval)
+	go scanAndReportPortMapWithInterval(portmapInterval)
 
 	// read loop
 	for {
@@ -182,12 +291,14 @@ func supervisorLoop(udsPath string) {
 	}
 }
 
-func metricsLoop() {
+func metricsLoopWithInterval(interval time.Duration) {
 	start := time.Now()
 	for {
-		time.Sleep(10 * time.Second)
-
+		time.Sleep(interval)
 		cpuPerc, _ := cpu.Percent(0, false)
+		if len(cpuPerc) == 0 {
+			continue
+		}
 		memStat, _ := mem.VirtualMemory()
 		diskStat, _ := disk.Usage("/")
 
@@ -217,43 +328,37 @@ func metricsLoop() {
 	}
 }
 
-func scanAndReportPortMap() {
-	ticker := time.NewTicker(15 * time.Second)
+func scanAndReportPortMapWithInterval(interval time.Duration) {
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-
 	for {
 		<-ticker.C
-
 		conns, err := gopsnet.Connections("inet")
 		if err != nil {
 			logger.Warnf("portmap: failed to get connections: %v", err)
 			continue
 		}
-
 		ports := make([]map[string]interface{}, 0, 8)
 		for _, c := range conns {
 			if c.Status != "LISTEN" {
 				continue
 			}
-
 			proto := "tcp"
 			laddr := c.Laddr.IP
 			if laddr == "" {
 				laddr = "0.0.0.0"
 			}
 			portStr := strconv.Itoa(int(c.Laddr.Port))
-
 			entry := map[string]interface{}{
 				"proto":  proto,
 				"laddr":  laddr,
 				"port":   portStr,
 				"pid":    c.Pid,
 				"family": c.Family,
-				"raw":    c, // optional: 原始结构用于排查
+				"raw":    c,
 			}
 			ports = append(ports, entry)
 		}
-
 		body := map[string]interface{}{
 			"type":      "port_map",
 			"ports":     ports,
@@ -261,7 +366,6 @@ func scanAndReportPortMap() {
 		}
 		bs, _ := json.Marshal(body)
 		env := &pb.Envelope{Payload: &pb.Envelope_Message{Message: &pb.Message{From: agentID, Body: string(bs)}}}
-
 		ctrlStreamMu.Lock()
 		s := ctrlStream
 		ctrlStreamMu.Unlock()
