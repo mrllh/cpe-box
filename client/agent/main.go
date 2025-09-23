@@ -195,8 +195,29 @@ func main() {
 		at = pb.AgentType_AGENT_TYPE_UNKNOWN
 	}
 
+	logPathTemplate := cfg.Logging.AgentFile
+	if logPathTemplate == "" {
+		logPathTemplate = "/tmp/cpe-box-agent-%s.log"
+	}
+
+	var logPath string
+	if strings.Contains(logPathTemplate, "%s") {
+		logPath = fmt.Sprintf(logPathTemplate, agentID)
+	} else {
+		base := filepath.Base(logPathTemplate)
+		dir := filepath.Dir(logPathTemplate)
+		ext := filepath.Ext(base)
+		name := strings.TrimSuffix(base, ext)
+		logPath = filepath.Join(dir, fmt.Sprintf("%s-%s%s", name, agentID, ext))
+	}
+
+	logDir := filepath.Dir(logPath)
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to create log dir %s: %v\n", logDir, err)
+	}
+
 	sugarLogger, cleanup, err := initLoggerWithRotationAgent(
-		cfg.Logging.AgentFile,
+		logPath,
 		cfg.Logging.Level,
 		cfg.Logging.MaxSizeMB,
 		cfg.Logging.MaxBackups,
