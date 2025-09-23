@@ -717,7 +717,7 @@ var (
 	pendingTransfers   = make(map[string]chan *TransferRecord) // transfer_id -> chan
 )
 
-// uploadFileNewStream 支持断点续传
+// uploadFileNewStream 断点续传
 func uploadFileNewStream(agentID, path string) error {
 	// open file once to compute meta
 	fmeta, err := os.Open(path)
@@ -727,7 +727,6 @@ func uploadFileNewStream(agentID, path string) error {
 	fi, _ := fmeta.Stat()
 	totalSize := fi.Size()
 
-	// ~2GB, 根据实际调整或从 cfg 读取
 	const MaxUploadSize = int64(1 << 31)
 	if totalSize > MaxUploadSize {
 		fmeta.Close()
@@ -751,7 +750,12 @@ func uploadFileNewStream(agentID, path string) error {
 	defer f.Close()
 
 	filename := filepath.Base(path)
-	transferID := fmt.Sprintf("%s-%d", agentID, time.Now().UnixNano())
+	// transferID := fmt.Sprintf("%s-%d", agentID, time.Now().UnixNano())
+	shaPrefix := shaHex
+	if len(shaPrefix) > 32 {
+		shaPrefix = shaPrefix[:32]
+	}
+	transferID := fmt.Sprintf("%s_%s", agentID, shaPrefix)
 
 	// find agent session
 	mu.Lock()

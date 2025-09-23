@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -54,7 +55,7 @@ type AgentConfig struct {
 		AgentType string `yaml:"type"`
 		Token     string `yaml:"token"`
 		TLS       bool   `yaml:"tls"`
-		UdsSocket string `yaml:"uds_socket"`
+		// UdsSocket string `yaml:"uds_socket"`
 	} `yaml:"agent"`
 	Logging struct {
 		Level      string `yaml:"level"`
@@ -214,10 +215,10 @@ func main() {
 	}
 
 	udsPath := os.Getenv("CPE_AGENT_SOCK")
-	fmt.Printf("uds %s\n", udsPath)
-	if udsPath == "" {
-		udsPath = cfg.Server.UdsSocket
-	}
+	// fmt.Printf("uds %s\n", udsPath)
+	// if udsPath == "" {
+	// 	udsPath = cfg.Server.UdsSocket
+	// }
 
 	// supervisor heartbeats
 	go supervisorLoop(udsPath)
@@ -504,6 +505,29 @@ func handleFileChunk(ch *pb.FileChunk) {
 	}
 }
 
+func sanitizeFilename(name string) string {
+	// basename to avoid path traversal
+	name = filepath.Base(name)
+	if name == "" {
+		return "file"
+	}
+	// remove path separators and control chars
+	name = strings.Map(func(r rune) rune {
+		if r == os.PathSeparator || r == '/' || r == '\\' {
+			return -1
+		}
+		// allow printable ASCII and unicode letters/digits/dot/underscore/hyphen
+		if r < 32 {
+			return -1
+		}
+		return r
+	}, name)
+	if name == "" {
+		return "file"
+	}
+	return name
+}
+
 func acceptStreamLoop(session *yamux.Session) {
 	for {
 		stream, err := session.Accept()
@@ -573,16 +597,32 @@ func handleIncomingStream(stream net.Conn) {
 }
 
 func handleFileStreamFramed(stream net.Conn, first *pb.FileChunk) {
-	// First is expected to be meta (may have Chunk==nil) but could also contain initial chunk bytes.
 	transferID := first.TransferId
 	filename := first.Filename
 	expectedSize := first.TotalSize
 	expectedSha := first.Sha256
 
-	path := filepath.Join("/tmp", transferID+"_"+filename)
+	sanName := sanitizeFilename(filename)
+	tmpDir := "/tmp"
+	basePath := filepath.Join(tmpDir, transferID+"_"+sanName)               // preferred new format
+	legacyPath := filepath.Join(tmpDir, transferID+"_"+sanName+"_"+sanName) // backward compat
+
+	// choose existing file if any (prefer new format)
+	var path string
+	if fi, err := os.Stat(basePath); err == nil && !fi.IsDir() {
+		path = basePath
+	} else if fi, err := os.Stat(legacyPath); err == nil && !fi.IsDir() {
+		path = legacyPath
+	} else {
+		path = basePath
+	}
+
 	logger.Infof("Receiving file transfer %s -> %s expected_size=%d sha256=%s", transferID, path, expectedSize, expectedSha)
 
-	// Ensure out dir exists (already should)
+	// Ensure out dir exists
+	dir := filepath.Dir(path)
+	_ = os.MkdirAll(dir, 0o700)
+
 	// Determine how many bytes we already have
 	var received int64 = 0
 
@@ -590,16 +630,21 @@ func handleFileStreamFramed(stream net.Conn, first *pb.FileChunk) {
 	f, ok := fileBuffers[transferID]
 	fileBuffersMu.Unlock()
 
-	if ok {
-		// file already open in buffer
+	if ok && f != nil {
 		if fi, err := f.Stat(); err == nil {
 			received = fi.Size()
+		} else {
+			_ = f.Close()
+			fileBuffersMu.Lock()
+			delete(fileBuffers, transferID)
+			fileBuffersMu.Unlock()
+			f = nil
+			received = 0
 		}
 	} else {
-		// check on-disk file if any
 		if fi, err := os.Stat(path); err == nil {
 			received = fi.Size()
-			// open and put into buffer
+			// open for read/write and append
 			ff, err := os.OpenFile(path, os.O_RDWR, 0o600)
 			if err == nil {
 				fileBuffersMu.Lock()
@@ -607,14 +652,11 @@ func handleFileStreamFramed(stream net.Conn, first *pb.FileChunk) {
 				fileBuffersMu.Unlock()
 				f = ff
 			} else {
-				// cannot open, we'll create later
 				f = nil
 			}
 		}
 	}
 
-	// If first chunk had some bytes and offset is 0 by legacy behavior,
-	// we should not double apply. We'll reply resume with current received.
 	// Send FileResume back on same stream (how many bytes already received)
 	resume := &pb.FileResume{
 		TransferId: transferID,
@@ -622,69 +664,60 @@ func handleFileStreamFramed(stream net.Conn, first *pb.FileChunk) {
 	}
 	if err := framing.WriteMessage(stream, &pb.Envelope{Payload: &pb.Envelope_FileResume{FileResume: resume}}); err != nil {
 		logger.Warnf("failed to write FileResume for %s: %v", transferID, err)
-		// continue anyway
+	} else {
+		logger.Infof("Sent FileResume for %s received=%d", transferID, received)
 	}
 
 	// Ensure file is open for appending/writing
 	if f == nil {
-		dir := filepath.Dir(path)
-		_ = os.MkdirAll(dir, 0o700)
 		ff, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 		if err != nil {
 			logger.Warnf("create file err: %v", err)
 			return
 		}
-		// set initial size if needed
-		if received > 0 {
-			if _, err := ff.Seek(received, io.SeekStart); err != nil {
-				logger.Warnf("seek existing file err: %v", err)
-				ff.Close()
-				return
-			}
+		if _, err := ff.Seek(received, io.SeekStart); err != nil {
+			logger.Warnf("seek created file err: %v", err)
+			ff.Close()
+			return
 		}
 		fileBuffersMu.Lock()
 		fileBuffers[transferID] = ff
 		fileBuffersMu.Unlock()
 		f = ff
 	} else {
-		// ensure file offset at received
 		if _, err := f.Seek(received, io.SeekStart); err != nil {
-			logger.Warnf("seek existing buffer err: %v", err)
+			logger.Warnf("seek existing file err: %v", err)
 			return
 		}
 	}
 
+	// Prepare hash calculator. If we already have partial data and expectedSha provided,
+	// include existing data in hash calculation.
 	h := sha256.New()
-	// If file already has data, include it in hash calc (so final hash matches)
-	if received > 0 {
-		// compute hash of existing data (only if expectedSha provided)
-		if expectedSha != "" {
-			if _, err := f.Seek(0, io.SeekStart); err == nil {
-				if _, err := io.Copy(h, f); err != nil {
-					logger.Warnf("hash existing file err: %v", err)
-				}
-				// move back to end for append
-				if _, err := f.Seek(received, io.SeekStart); err != nil {
-					logger.Warnf("seek fail after hash: %v", err)
-				}
+	if received > 0 && expectedSha != "" {
+		if _, err := f.Seek(0, io.SeekStart); err == nil {
+			if _, err := io.Copy(h, f); err != nil {
+				logger.Warnf("hash existing file err: %v", err)
+			}
+			if _, err := f.Seek(received, io.SeekStart); err != nil {
+				logger.Warnf("seek fail after hash: %v", err)
 			}
 		}
 	}
 
 	chunkIdx := 0
+	var writeCounter int64 = 0
+	const syncThreshold = int64(1 << 20) // fsync every 1MiB
 
-	// If the initial envelope had chunk bytes (legacy or early chunk),
-	// we should handle it only if it contains data and its offset matches expected.
+	// If the initial envelope had chunk bytes, handle them
 	if len(first.Chunk) > 0 {
-		// If first.Offset != 0 and not equal to received then adjust
-		if first.Offset != 0 && first.Offset != received {
-			logger.Warnf("initial chunk offset mismatch: got=%d expected=%d", first.Offset, received)
-			// try to seek to first.Offset
-			if _, err := f.Seek(first.Offset, io.SeekStart); err != nil {
-				logger.Warnf("seek to initial chunk offset failed: %v", err)
-				return
-			}
-			received = first.Offset
+		writeOffset := received
+		if first.Offset != 0 {
+			writeOffset = first.Offset
+		}
+		if _, err := f.Seek(writeOffset, io.SeekStart); err != nil {
+			logger.Warnf("seek to initial chunk offset failed: %v", err)
+			return
 		}
 		n, err := f.Write(first.Chunk)
 		if err != nil || n != len(first.Chunk) {
@@ -695,9 +728,16 @@ func handleFileStreamFramed(stream net.Conn, first *pb.FileChunk) {
 			logger.Warnf("hash write err: %v", err)
 			return
 		}
-		received += int64(len(first.Chunk))
+		received = writeOffset + int64(n)
+		writeCounter += int64(n)
 		chunkIdx++
 		logger.Infof("Received initial chunk #%d size=%d transfer=%s progress=%d/%d", chunkIdx, len(first.Chunk), transferID, received, expectedSize)
+		if writeCounter >= syncThreshold {
+			if err := f.Sync(); err != nil {
+				logger.Warnf("fsync failed: %v", err)
+			}
+			writeCounter = 0
+		}
 	}
 
 	// read remaining framed FileChunk messages until Last==true
@@ -719,16 +759,21 @@ func handleFileStreamFramed(stream net.Conn, first *pb.FileChunk) {
 		fc := fch.FileChunk
 		if fc.Last {
 			logger.Infof("Received last marker for transfer %s", transferID)
+			if writeCounter > 0 {
+				if err := f.Sync(); err != nil {
+					logger.Warnf("fsync final failed: %v", err)
+				}
+				writeCounter = 0
+			}
 			break
 		}
-		// Validate offset
-		expectedOffset := received
+
+		writeOffset := received
 		if fc.Offset != 0 {
-			expectedOffset = fc.Offset
+			writeOffset = fc.Offset
 		}
-		// Seek to expectedOffset to write
-		if _, err := f.Seek(expectedOffset, io.SeekStart); err != nil {
-			logger.Warnf("seek to offset %d failed: %v", expectedOffset, err)
+		if _, err := f.Seek(writeOffset, io.SeekStart); err != nil {
+			logger.Warnf("seek to offset %d failed: %v", writeOffset, err)
 			return
 		}
 		if len(fc.Chunk) > 0 {
@@ -741,9 +786,17 @@ func handleFileStreamFramed(stream net.Conn, first *pb.FileChunk) {
 				logger.Warnf("hash write err: %v", err)
 				return
 			}
-			received = expectedOffset + int64(len(fc.Chunk))
+			received = writeOffset + int64(len(fc.Chunk))
+			writeCounter += int64(len(fc.Chunk))
 			chunkIdx++
 			logger.Infof("Received chunk #%d size=%d transfer=%s progress=%d/%d", chunkIdx, len(fc.Chunk), transferID, received, expectedSize)
+
+			if writeCounter >= syncThreshold {
+				if err := f.Sync(); err != nil {
+					logger.Warnf("fsync failed: %v", err)
+				}
+				writeCounter = 0
+			}
 		}
 	}
 
@@ -767,13 +820,17 @@ func handleFileStreamFramed(stream net.Conn, first *pb.FileChunk) {
 
 	// close file and remove buffer
 	fileBuffersMu.Lock()
-	if f, ok := fileBuffers[transferID]; ok {
-		_ = f.Close()
+	if fbuf, ok := fileBuffers[transferID]; ok {
+		_ = fbuf.Sync()
+		_ = fbuf.Close()
 		delete(fileBuffers, transferID)
+	} else if f != nil {
+		_ = f.Sync()
+		_ = f.Close()
 	}
 	fileBuffersMu.Unlock()
 
-	// send status back to server via control stream (same as before)
+	// send status back to server via control stream
 	note := ""
 	if !ok {
 		note = "verification failed"
