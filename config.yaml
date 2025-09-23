@@ -24,7 +24,7 @@ logging:
   compress: true
 
 forward:
-  default_max_conns: 1
+  default_max_conns: 2
 
 agent_defaults:
   reports_dir: "/tmp/cpe_reports"

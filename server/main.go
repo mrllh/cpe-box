@@ -654,6 +654,16 @@ func processAgentMessage(agentID string, body string) {
 		transfers[transferID] = rec
 		transfersMu.Unlock()
 
+		// notify pendingTransfers if any
+		pendingTransfersMu.Lock()
+		if ch, ok := pendingTransfers[transferID]; ok {
+			select {
+			case ch <- rec:
+			default:
+			}
+		}
+		pendingTransfersMu.Unlock()
+
 		sugar.Infof("Recorded transfer result: id=%s agent=%s ok=%v received=%d expected=%d sha=%s",
 			transferID, agentID, ok, rec.Received, rec.Expected, rec.Sha256)
 
@@ -702,15 +712,27 @@ func processAgentMessage(agentID string, body string) {
 	}
 }
 
+var (
+	pendingTransfersMu sync.Mutex
+	pendingTransfers   = make(map[string]chan *TransferRecord) // transfer_id -> chan
+)
+
+// uploadFileNewStream 支持断点续传
 func uploadFileNewStream(agentID, path string) error {
-	// open file twice: once to compute hash, second to stream
+	// open file once to compute meta
 	fmeta, err := os.Open(path)
 	if err != nil {
 		return err
 	}
-	// compute total size and sha256
 	fi, _ := fmeta.Stat()
 	totalSize := fi.Size()
+
+	// ~2GB, 根据实际调整或从 cfg 读取
+	const MaxUploadSize = int64(1 << 31)
+	if totalSize > MaxUploadSize {
+		fmeta.Close()
+		return fmt.Errorf("file too large: %d > %d", totalSize, MaxUploadSize)
+	}
 
 	h := sha256.New()
 	if _, err := io.Copy(h, fmeta); err != nil {
@@ -754,16 +776,58 @@ func uploadFileNewStream(agentID, path string) error {
 		Filename:   filename,
 		TotalSize:  totalSize,
 		Sha256:     shaHex,
+		Offset:     0, // offset=0 for meta
 	}
 	if err := framing.WriteMessage(stream, &pb.Envelope{Payload: &pb.Envelope_FileChunk{FileChunk: meta}}); err != nil {
 		return fmt.Errorf("send meta err: %w", err)
 	}
 	sugar.Infof("Sent meta for transfer %s filename=%s size=%d sha256=%s", transferID, filename, totalSize, shaHex)
 
-	// send file in chunks
+	// Wait for agent to respond with FileResume (how many bytes already received)
+	var startOffset int64 = 0
+	// set a reasonable timeout for agent to reply
+	stream.SetReadDeadline(time.Now().Add(10 * time.Second))
+	var env pb.Envelope
+	if err := framing.ReadMessage(stream, &env); err != nil {
+		// if agent didn't respond, we'll assume 0 and proceed (or abort)
+		sugar.Warnf("no resume reply from agent %s for transfer %s: %v (will assume offset=0)", agentID, transferID, err)
+	} else {
+		if fr, ok := env.Payload.(*pb.Envelope_FileResume); ok {
+			startOffset = fr.FileResume.Received
+			sugar.Infof("Agent %s resume info for transfer %s: received=%d", agentID, transferID, startOffset)
+		} else {
+			sugar.Warnf("unexpected reply after meta from agent %s: %T", agentID, env.Payload)
+		}
+	}
+	// clear deadline
+	stream.SetReadDeadline(time.Time{})
+
+	if startOffset < 0 || startOffset > totalSize {
+		return fmt.Errorf("invalid start offset from agent: %d", startOffset)
+	}
+	if startOffset == totalSize {
+		sugar.Infof("agent already has full file for transfer %s; skipping upload", transferID)
+		// send final marker anyway to indicate we're done (optional)
+		last := &pb.FileChunk{
+			TransferId: transferID,
+			Chunk:      nil,
+			Last:       true,
+			Filename:   filename,
+			Offset:     totalSize,
+		}
+		_ = framing.WriteMessage(stream, &pb.Envelope{Payload: &pb.Envelope_FileChunk{FileChunk: last}})
+		return nil
+	}
+
+	// seek file to startOffset
+	if _, err := f.Seek(startOffset, io.SeekStart); err != nil {
+		return fmt.Errorf("seek file err: %w", err)
+	}
+
+	// send file in chunks (each chunk includes offset)
 	buf := make([]byte, 64*1024) // 64KB chunk
 	idx := 0
-	sent := int64(0)
+	sent := startOffset
 	for {
 		n, rerr := f.Read(buf)
 		if n > 0 {
@@ -773,6 +837,7 @@ func uploadFileNewStream(agentID, path string) error {
 				Chunk:      chunkBytes,
 				Last:       false,
 				Filename:   filename,
+				Offset:     sent, // this chunk starts at 'sent'
 			}
 			if err := framing.WriteMessage(stream, &pb.Envelope{Payload: &pb.Envelope_FileChunk{FileChunk: chunk}}); err != nil {
 				return fmt.Errorf("write chunk err: %w", err)
@@ -788,6 +853,7 @@ func uploadFileNewStream(agentID, path string) error {
 				Chunk:      nil,
 				Last:       true,
 				Filename:   filename,
+				Offset:     sent,
 			}
 			if err := framing.WriteMessage(stream, &pb.Envelope{Payload: &pb.Envelope_FileChunk{FileChunk: last}}); err != nil {
 				return fmt.Errorf("write last err: %w", err)
@@ -797,6 +863,31 @@ func uploadFileNewStream(agentID, path string) error {
 		}
 		if rerr != nil {
 			return fmt.Errorf("read file err: %w", rerr)
+		}
+	}
+
+	// Optionally wait for agent's final report (file_transfer_result) via pendingTransfers
+	waitForAgentReport := true
+	if waitForAgentReport {
+		ch := make(chan *TransferRecord, 1)
+		pendingTransfersMu.Lock()
+		pendingTransfers[transferID] = ch
+		pendingTransfersMu.Unlock()
+		defer func() {
+			pendingTransfersMu.Lock()
+			delete(pendingTransfers, transferID)
+			pendingTransfersMu.Unlock()
+		}()
+
+		select {
+		case rec := <-ch:
+			if !rec.Ok {
+				return fmt.Errorf("agent reported transfer failed: %s", rec.Note)
+			}
+			sugar.Infof("agent reported transfer ok: %s", transferID)
+			return nil
+		case <-time.After(60 * time.Second):
+			return fmt.Errorf("timeout waiting for agent report (transfer=%s)", transferID)
 		}
 	}
 
