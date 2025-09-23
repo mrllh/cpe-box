@@ -35,8 +35,10 @@ import (
 const defaultServerAddr = "127.0.0.1:9999"
 
 var (
-	agentID string
-	logger  *zap.SugaredLogger
+	agentID      string
+	agentVerison string
+	agentTypeStr string
+	logger       *zap.SugaredLogger
 )
 
 var (
@@ -46,10 +48,13 @@ var (
 
 type AgentConfig struct {
 	Server struct {
-		Addr  string `yaml:"server_addr"`
-		ID    string `yaml:"id"`
-		Token string `yaml:"token"`
-		TLS   bool   `yaml:"tls"`
+		Addr      string `yaml:"server_addr"`
+		ID        string `yaml:"id"`
+		Version   string `yaml:"version"`
+		AgentType string `yaml:"type"`
+		Token     string `yaml:"token"`
+		TLS       bool   `yaml:"tls"`
+		UdsSocket string `yaml:"uds_socket"`
 	} `yaml:"agent"`
 	Logging struct {
 		Level      string `yaml:"level"`
@@ -70,7 +75,7 @@ func loadAgentConfig(path string) (*AgentConfig, error) {
 	cfg := &AgentConfig{}
 	// defaults
 	cfg.Server.Addr = defaultServerAddr
-	cfg.Server.ID = "agent-default"
+	cfg.Server.ID = "agent-0"
 	cfg.Logging.Level = "info"
 	cfg.Logging.AgentFile = "/tmp/cpe-box-agent.log"
 	cfg.Logging.MaxSizeMB = 50
@@ -150,11 +155,20 @@ func dialServer(addr string, useTLS bool, tlsSkipVerify bool, caPath string) (ne
 }
 
 func main() {
-	cfgPath := flag.String("config", "../../config.yaml", "path to config yaml (optional)")
+	cfgPathFlag := flag.String("config", "../../config.yaml", "path to config yaml (optional)")
 	flag.StringVar(&agentID, "id", "", "unique agent id")
+	flag.StringVar(&agentVerison, "version", "", "agent version")
+	flag.StringVar(&agentTypeStr, "type", "", "agent type")
 	flag.Parse()
 
-	cfg, err := loadAgentConfig(*cfgPath)
+	cfgPath := os.Getenv("CPE_AGENT_CONFIG")
+	if cfgPath == "" {
+		if *cfgPathFlag != "" {
+			cfgPath = *cfgPathFlag
+		}
+	}
+
+	cfg, err := loadAgentConfig(cfgPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load config err: %v\n", err)
 		os.Exit(1)
@@ -162,6 +176,22 @@ func main() {
 
 	if agentID == "" {
 		agentID = cfg.Server.ID
+	}
+
+	if agentVerison == "" {
+		agentVerison = cfg.Server.Version
+	}
+
+	if agentTypeStr == "" {
+		agentTypeStr = cfg.Server.AgentType
+	}
+
+	var at pb.AgentType
+	switch agentTypeStr {
+	case "cpe-box":
+		at = pb.AgentType_AGENT_TYPE_CPE
+	default:
+		at = pb.AgentType_AGENT_TYPE_UNKNOWN
 	}
 
 	sugarLogger, cleanup, err := initLoggerWithRotationAgent(
@@ -184,8 +214,9 @@ func main() {
 	}
 
 	udsPath := os.Getenv("CPE_AGENT_SOCK")
+	fmt.Printf("uds %s\n", udsPath)
 	if udsPath == "" {
-		udsPath = "/tmp/cpe_agent.sock"
+		udsPath = cfg.Server.UdsSocket
 	}
 
 	// supervisor heartbeats
@@ -236,11 +267,11 @@ func main() {
 
 	// register (include optional token)
 	token := cfg.Server.Token
-	reg := &pb.Envelope{Payload: &pb.Envelope_Register{Register: &pb.Register{Id: agentID, Token: token}}}
+	reg := &pb.Envelope{Payload: &pb.Envelope_Register{Register: &pb.Register{Id: agentID, Token: token, Version: agentVerison, AgentType: at}}}
 	if err := framing.WriteMessage(stream, reg); err != nil {
 		logger.Fatalf("write register err: %v", err)
 	}
-	logger.Infof("registered id=%s", agentID)
+	logger.Infof("registered id=%s version=%s type=%s", agentID, agentVerison, agentTypeStr)
 
 	metricsInterval := time.Duration(cfg.AgentDefaults.MetricsIntervalSec) * time.Second
 	portmapInterval := time.Duration(cfg.AgentDefaults.PortmapIntervalSec) * time.Second

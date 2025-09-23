@@ -79,6 +79,52 @@ func (CommandType) EnumDescriptor() ([]byte, []int) {
 	return file_message_proto_rawDescGZIP(), []int{0}
 }
 
+type AgentType int32
+
+const (
+	AgentType_AGENT_TYPE_UNKNOWN AgentType = 0
+	AgentType_AGENT_TYPE_CPE     AgentType = 1
+)
+
+// Enum value maps for AgentType.
+var (
+	AgentType_name = map[int32]string{
+		0: "AGENT_TYPE_UNKNOWN",
+		1: "AGENT_TYPE_CPE",
+	}
+	AgentType_value = map[string]int32{
+		"AGENT_TYPE_UNKNOWN": 0,
+		"AGENT_TYPE_CPE":     1,
+	}
+)
+
+func (x AgentType) Enum() *AgentType {
+	p := new(AgentType)
+	*p = x
+	return p
+}
+
+func (x AgentType) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (AgentType) Descriptor() protoreflect.EnumDescriptor {
+	return file_message_proto_enumTypes[1].Descriptor()
+}
+
+func (AgentType) Type() protoreflect.EnumType {
+	return &file_message_proto_enumTypes[1]
+}
+
+func (x AgentType) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use AgentType.Descriptor instead.
+func (AgentType) EnumDescriptor() ([]byte, []int) {
+	return file_message_proto_rawDescGZIP(), []int{1}
+}
+
 type PortForward struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ReqId         string                 `protobuf:"bytes,1,opt,name=req_id,json=reqId,proto3" json:"req_id,omitempty"`
@@ -143,6 +189,8 @@ type Register struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Token         string                 `protobuf:"bytes,2,opt,name=token,proto3" json:"token,omitempty"`
+	Version       string                 `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
+	AgentType     AgentType              `protobuf:"varint,4,opt,name=agent_type,json=agentType,proto3,enum=pb.AgentType" json:"agent_type,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -189,6 +237,20 @@ func (x *Register) GetToken() string {
 		return x.Token
 	}
 	return ""
+}
+
+func (x *Register) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *Register) GetAgentType() AgentType {
+	if x != nil {
+		return x.AgentType
+	}
+	return AgentType_AGENT_TYPE_UNKNOWN
 }
 
 type Heartbeat struct {
@@ -431,6 +493,7 @@ type FileChunk struct {
 	Filename      string                 `protobuf:"bytes,4,opt,name=filename,proto3" json:"filename,omitempty"`
 	TotalSize     int64                  `protobuf:"varint,5,opt,name=total_size,json=totalSize,proto3" json:"total_size,omitempty"`
 	Sha256        string                 `protobuf:"bytes,6,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	Offset        int64                  `protobuf:"varint,7,opt,name=offset,proto3" json:"offset,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -507,6 +570,65 @@ func (x *FileChunk) GetSha256() string {
 	return ""
 }
 
+func (x *FileChunk) GetOffset() int64 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+type FileResume struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TransferId    string                 `protobuf:"bytes,1,opt,name=transfer_id,json=transferId,proto3" json:"transfer_id,omitempty"`
+	Received      int64                  `protobuf:"varint,2,opt,name=received,proto3" json:"received,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FileResume) Reset() {
+	*x = FileResume{}
+	mi := &file_message_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FileResume) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FileResume) ProtoMessage() {}
+
+func (x *FileResume) ProtoReflect() protoreflect.Message {
+	mi := &file_message_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FileResume.ProtoReflect.Descriptor instead.
+func (*FileResume) Descriptor() ([]byte, []int) {
+	return file_message_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *FileResume) GetTransferId() string {
+	if x != nil {
+		return x.TransferId
+	}
+	return ""
+}
+
+func (x *FileResume) GetReceived() int64 {
+	if x != nil {
+		return x.Received
+	}
+	return 0
+}
+
 type Envelope struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Payload:
@@ -518,6 +640,7 @@ type Envelope struct {
 	//	*Envelope_Result
 	//	*Envelope_FileChunk
 	//	*Envelope_PortForward
+	//	*Envelope_FileResume
 	Payload       isEnvelope_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -525,7 +648,7 @@ type Envelope struct {
 
 func (x *Envelope) Reset() {
 	*x = Envelope{}
-	mi := &file_message_proto_msgTypes[7]
+	mi := &file_message_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -537,7 +660,7 @@ func (x *Envelope) String() string {
 func (*Envelope) ProtoMessage() {}
 
 func (x *Envelope) ProtoReflect() protoreflect.Message {
-	mi := &file_message_proto_msgTypes[7]
+	mi := &file_message_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -550,7 +673,7 @@ func (x *Envelope) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Envelope.ProtoReflect.Descriptor instead.
 func (*Envelope) Descriptor() ([]byte, []int) {
-	return file_message_proto_rawDescGZIP(), []int{7}
+	return file_message_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *Envelope) GetPayload() isEnvelope_Payload {
@@ -623,6 +746,15 @@ func (x *Envelope) GetPortForward() *PortForward {
 	return nil
 }
 
+func (x *Envelope) GetFileResume() *FileResume {
+	if x != nil {
+		if x, ok := x.Payload.(*Envelope_FileResume); ok {
+			return x.FileResume
+		}
+	}
+	return nil
+}
+
 type isEnvelope_Payload interface {
 	isEnvelope_Payload()
 }
@@ -655,6 +787,10 @@ type Envelope_PortForward struct {
 	PortForward *PortForward `protobuf:"bytes,7,opt,name=port_forward,json=portForward,proto3,oneof"`
 }
 
+type Envelope_FileResume struct {
+	FileResume *FileResume `protobuf:"bytes,8,opt,name=file_resume,json=fileResume,proto3,oneof"`
+}
+
 func (*Envelope_Register) isEnvelope_Payload() {}
 
 func (*Envelope_Heartbeat) isEnvelope_Payload() {}
@@ -669,6 +805,8 @@ func (*Envelope_FileChunk) isEnvelope_Payload() {}
 
 func (*Envelope_PortForward) isEnvelope_Payload() {}
 
+func (*Envelope_FileResume) isEnvelope_Payload() {}
+
 var File_message_proto protoreflect.FileDescriptor
 
 const file_message_proto_rawDesc = "" +
@@ -678,10 +816,13 @@ const file_message_proto_rawDesc = "" +
 	"\x06req_id\x18\x01 \x01(\tR\x05reqId\x12\x14\n" +
 	"\x05proto\x18\x02 \x01(\tR\x05proto\x12\x1f\n" +
 	"\vtarget_addr\x18\x03 \x01(\tR\n" +
-	"targetAddr\"0\n" +
+	"targetAddr\"x\n" +
 	"\bRegister\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
-	"\x05token\x18\x02 \x01(\tR\x05token\"+\n" +
+	"\x05token\x18\x02 \x01(\tR\x05token\x12\x18\n" +
+	"\aversion\x18\x03 \x01(\tR\aversion\x12,\n" +
+	"\n" +
+	"agent_type\x18\x04 \x01(\x0e2\r.pb.AgentTypeR\tagentType\"+\n" +
 	"\tHeartbeat\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x0e\n" +
 	"\x02ts\x18\x02 \x01(\x04R\x02ts\"1\n" +
@@ -696,7 +837,7 @@ const file_message_proto_rawDesc = "" +
 	"\ttarget_id\x18\x01 \x01(\tR\btargetId\x12\x0e\n" +
 	"\x02ok\x18\x02 \x01(\bR\x02ok\x12\x16\n" +
 	"\x06output\x18\x03 \x01(\tR\x06output\x12\x15\n" +
-	"\x06req_id\x18\x04 \x01(\tR\x05reqId\"\xa9\x01\n" +
+	"\x06req_id\x18\x04 \x01(\tR\x05reqId\"\xc1\x01\n" +
 	"\tFileChunk\x12\x1f\n" +
 	"\vtransfer_id\x18\x01 \x01(\tR\n" +
 	"transferId\x12\x14\n" +
@@ -705,7 +846,13 @@ const file_message_proto_rawDesc = "" +
 	"\bfilename\x18\x04 \x01(\tR\bfilename\x12\x1d\n" +
 	"\n" +
 	"total_size\x18\x05 \x01(\x03R\ttotalSize\x12\x16\n" +
-	"\x06sha256\x18\x06 \x01(\tR\x06sha256\"\xd5\x02\n" +
+	"\x06sha256\x18\x06 \x01(\tR\x06sha256\x12\x16\n" +
+	"\x06offset\x18\a \x01(\x03R\x06offset\"I\n" +
+	"\n" +
+	"FileResume\x12\x1f\n" +
+	"\vtransfer_id\x18\x01 \x01(\tR\n" +
+	"transferId\x12\x1a\n" +
+	"\breceived\x18\x02 \x01(\x03R\breceived\"\x88\x03\n" +
 	"\bEnvelope\x12*\n" +
 	"\bregister\x18\x01 \x01(\v2\f.pb.RegisterH\x00R\bregister\x12-\n" +
 	"\theartbeat\x18\x02 \x01(\v2\r.pb.HeartbeatH\x00R\theartbeat\x12'\n" +
@@ -714,7 +861,9 @@ const file_message_proto_rawDesc = "" +
 	"\x06result\x18\x05 \x01(\v2\x11.pb.CommandResultH\x00R\x06result\x12.\n" +
 	"\n" +
 	"file_chunk\x18\x06 \x01(\v2\r.pb.FileChunkH\x00R\tfileChunk\x124\n" +
-	"\fport_forward\x18\a \x01(\v2\x0f.pb.PortForwardH\x00R\vportForwardB\t\n" +
+	"\fport_forward\x18\a \x01(\v2\x0f.pb.PortForwardH\x00R\vportForward\x121\n" +
+	"\vfile_resume\x18\b \x01(\v2\x0e.pb.FileResumeH\x00R\n" +
+	"fileResumeB\t\n" +
 	"\apayload*v\n" +
 	"\vCommandType\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\v\n" +
@@ -722,7 +871,10 @@ const file_message_proto_rawDesc = "" +
 	"\tRUN_SHELL\x10\x02\x12\x0f\n" +
 	"\vUPLOAD_FILE\x10\x03\x12\x16\n" +
 	"\x12START_PORT_FORWARD\x10\x04\x12\x15\n" +
-	"\x11STOP_PORT_FORWARD\x10\x05B\rZ\v/cpe-box/pbb\x06proto3"
+	"\x11STOP_PORT_FORWARD\x10\x05*7\n" +
+	"\tAgentType\x12\x16\n" +
+	"\x12AGENT_TYPE_UNKNOWN\x10\x00\x12\x12\n" +
+	"\x0eAGENT_TYPE_CPE\x10\x01B\rZ\v/cpe-box/pbb\x06proto3"
 
 var (
 	file_message_proto_rawDescOnce sync.Once
@@ -736,33 +888,37 @@ func file_message_proto_rawDescGZIP() []byte {
 	return file_message_proto_rawDescData
 }
 
-var file_message_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_message_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_message_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_message_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_message_proto_goTypes = []any{
 	(CommandType)(0),      // 0: pb.CommandType
-	(*PortForward)(nil),   // 1: pb.PortForward
-	(*Register)(nil),      // 2: pb.Register
-	(*Heartbeat)(nil),     // 3: pb.Heartbeat
-	(*Message)(nil),       // 4: pb.Message
-	(*Command)(nil),       // 5: pb.Command
-	(*CommandResult)(nil), // 6: pb.CommandResult
-	(*FileChunk)(nil),     // 7: pb.FileChunk
-	(*Envelope)(nil),      // 8: pb.Envelope
+	(AgentType)(0),        // 1: pb.AgentType
+	(*PortForward)(nil),   // 2: pb.PortForward
+	(*Register)(nil),      // 3: pb.Register
+	(*Heartbeat)(nil),     // 4: pb.Heartbeat
+	(*Message)(nil),       // 5: pb.Message
+	(*Command)(nil),       // 6: pb.Command
+	(*CommandResult)(nil), // 7: pb.CommandResult
+	(*FileChunk)(nil),     // 8: pb.FileChunk
+	(*FileResume)(nil),    // 9: pb.FileResume
+	(*Envelope)(nil),      // 10: pb.Envelope
 }
 var file_message_proto_depIdxs = []int32{
-	0, // 0: pb.Command.type:type_name -> pb.CommandType
-	2, // 1: pb.Envelope.register:type_name -> pb.Register
-	3, // 2: pb.Envelope.heartbeat:type_name -> pb.Heartbeat
-	4, // 3: pb.Envelope.message:type_name -> pb.Message
-	5, // 4: pb.Envelope.command:type_name -> pb.Command
-	6, // 5: pb.Envelope.result:type_name -> pb.CommandResult
-	7, // 6: pb.Envelope.file_chunk:type_name -> pb.FileChunk
-	1, // 7: pb.Envelope.port_forward:type_name -> pb.PortForward
-	8, // [8:8] is the sub-list for method output_type
-	8, // [8:8] is the sub-list for method input_type
-	8, // [8:8] is the sub-list for extension type_name
-	8, // [8:8] is the sub-list for extension extendee
-	0, // [0:8] is the sub-list for field type_name
+	1,  // 0: pb.Register.agent_type:type_name -> pb.AgentType
+	0,  // 1: pb.Command.type:type_name -> pb.CommandType
+	3,  // 2: pb.Envelope.register:type_name -> pb.Register
+	4,  // 3: pb.Envelope.heartbeat:type_name -> pb.Heartbeat
+	5,  // 4: pb.Envelope.message:type_name -> pb.Message
+	6,  // 5: pb.Envelope.command:type_name -> pb.Command
+	7,  // 6: pb.Envelope.result:type_name -> pb.CommandResult
+	8,  // 7: pb.Envelope.file_chunk:type_name -> pb.FileChunk
+	2,  // 8: pb.Envelope.port_forward:type_name -> pb.PortForward
+	9,  // 9: pb.Envelope.file_resume:type_name -> pb.FileResume
+	10, // [10:10] is the sub-list for method output_type
+	10, // [10:10] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_message_proto_init() }
@@ -770,7 +926,7 @@ func file_message_proto_init() {
 	if File_message_proto != nil {
 		return
 	}
-	file_message_proto_msgTypes[7].OneofWrappers = []any{
+	file_message_proto_msgTypes[8].OneofWrappers = []any{
 		(*Envelope_Register)(nil),
 		(*Envelope_Heartbeat)(nil),
 		(*Envelope_Message)(nil),
@@ -778,14 +934,15 @@ func file_message_proto_init() {
 		(*Envelope_Result)(nil),
 		(*Envelope_FileChunk)(nil),
 		(*Envelope_PortForward)(nil),
+		(*Envelope_FileResume)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_message_proto_rawDesc), len(file_message_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   8,
+			NumEnums:      2,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

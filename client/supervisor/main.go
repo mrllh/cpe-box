@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"sync"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 var agentID string
@@ -18,9 +20,32 @@ var (
 	restartCh = make(chan struct{}, 1)
 )
 
+type Config struct {
+	Agent struct {
+		ID string `yaml:"id"`
+	} `yaml:"agent"`
+}
+
 func main() {
-	// flag.StringVar(&agentID, "id", "agent-123", "agent id")
+	// flag.StringVar(&agentID, "id", "agent", "agent id")
 	// flag.Parse()
+
+	cfgPath := "../../config.yaml"
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		fmt.Println("read config err:", err)
+		return
+	}
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		fmt.Println("parse config err:", err)
+		return
+	}
+	agentID = cfg.Agent.ID
+	if agentID == "" {
+		agentID = "agent"
+	}
+
 	socketPath := fmt.Sprintf("%s/cpe_%s.sock", socketDir, agentID)
 	_ = os.Remove(socketPath)
 	l, err := net.Listen("unix", socketPath)
@@ -53,7 +78,7 @@ func agentManager(socketPath string) {
 		cmd.Env = append(os.Environ(),
 			fmt.Sprintf("CPE_AGENT_SOCK=%s", socketPath),
 			"AGENT_TLS=1",
-			"AGENT_TLS_SKIP_VERIFY=1", // 测试用，生产请用 AGENT_TLS_CA instead
+			"AGENT_TLS_SKIP_VERIFY=1", // 测试用，生产请用 AGENT_TLS_CA
 		)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr

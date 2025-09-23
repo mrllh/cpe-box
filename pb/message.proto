@@ -13,17 +13,22 @@ enum CommandType {
   STOP_PORT_FORWARD = 5;
 }
 
+enum AgentType {
+  AGENT_TYPE_UNKNOWN = 0;
+  AGENT_TYPE_CPE = 1;
+}
+
 message PortForward {
   string req_id = 1;
   string proto = 2;         // tcp
   string target_addr = 3;   // agent target address 127.0.0.1:9000
 }
 
-
-
 message Register {
   string id = 1;
   string token = 2;
+  string version = 3;
+  AgentType agent_type = 4;
 }
 
 message Heartbeat {
@@ -57,6 +62,13 @@ message FileChunk {
 
   int64 total_size = 5;
   string sha256 = 6;
+
+  int64 offset = 7;
+}
+
+message FileResume {
+  string transfer_id = 1;
+  int64 received = 2;
 }
 
 message Envelope {
@@ -68,5 +80,6 @@ message Envelope {
     CommandResult result = 5;
     FileChunk file_chunk = 6;
     PortForward port_forward = 7;
+    FileResume file_resume = 8;
   }
 }

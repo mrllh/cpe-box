@@ -117,13 +117,15 @@ func initLoggerWithRotation(path string, levelStr string, maxSizeMB, maxBackups,
 }
 
 type AgentConn struct {
-	id       string
-	stream   net.Conn
-	sendCh   chan proto.Message
-	lastSeen time.Time
-	session  *yamux.Session
-	logger   *zap.Logger
-	closed   chan struct{}
+	id        string
+	version   string
+	agentType pb.AgentType
+	stream    net.Conn
+	sendCh    chan proto.Message
+	lastSeen  time.Time
+	session   *yamux.Session
+	logger    *zap.Logger
+	closed    chan struct{}
 }
 
 var (
@@ -185,9 +187,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	addr := flag.String("addr", cfg.Server.ListenAddr, "listen address")
-	tlsCert := flag.String("tls-cert", cfg.Server.TLSCert, "tls cert path")
-	tlsKey := flag.String("tls-key", cfg.Server.TLSKey, "tls key path")
+	addr := &cfg.Server.ListenAddr
+	tlsCert := &cfg.Server.TLSCert
+	tlsKey := &cfg.Server.TLSKey
 
 	sugarLogger, cleanup, err := initLoggerWithRotation(
 		cfg.Logging.File,
@@ -279,25 +281,27 @@ func handleStream(stream net.Conn, session *yamux.Session) {
 		return
 	}
 	id := reg.Register.Id
+	version := reg.Register.Version
+	atype := reg.Register.AgentType
 
 	ac := &AgentConn{
-		id:       id,
-		stream:   stream,
-		sendCh:   make(chan proto.Message, 32),
-		lastSeen: time.Now(),
-		session:  session,
-		logger:   zap.NewExample(),
-		closed:   make(chan struct{}),
+		id:        id,
+		version:   version,
+		agentType: atype,
+		stream:    stream,
+		sendCh:    make(chan proto.Message, 32),
+		lastSeen:  time.Now(),
+		session:   session,
+		logger:    zap.NewExample(),
+		closed:    make(chan struct{}),
 	}
 	mu.Lock()
 	agents[id] = ac
 	mu.Unlock()
-	sugar.Infof("agent %s registered", id)
+	sugar.Infof("agent %s registered version=%q type=%v", id, version, atype.String())
 
-	// writer
 	go agentWriter(ac)
 
-	// reader loop
 	for {
 		var env pb.Envelope
 		if err := framing.ReadMessage(stream, &env); err != nil {
@@ -593,7 +597,7 @@ func listAgents() {
 	}
 	fmt.Println("agents:")
 	for id, a := range agents {
-		fmt.Printf(" - %s (lastSeen=%v)\n", id, a.lastSeen)
+		fmt.Printf(" - %s type=%v version=%s (lastSeen=%v)\n", id, a.agentType, a.version, a.lastSeen)
 	}
 }
 
@@ -1005,15 +1009,32 @@ func startAPIServer(addr string) {
 		})
 	}
 
+	type AgentInfo struct {
+		ID        string       `json:"id"`
+		Version   string       `json:"version"`
+		AgentType pb.AgentType `json:"agent_type"`
+		LastSeen  time.Time    `json:"last_seen"`
+	}
+
 	r.GET("/api/agents", func(c *gin.Context) {
 		mu.Lock()
-		ids := make([]string, 0, len(agents))
-		for id := range agents {
-			ids = append(ids, id)
+		infos := make([]AgentInfo, 0, len(agents))
+		for _, a := range agents {
+			infos = append(infos, AgentInfo{ID: a.id, Version: a.version, AgentType: a.agentType, LastSeen: a.lastSeen})
 		}
 		mu.Unlock()
-		c.JSON(200, gin.H{"agents": ids})
+		c.JSON(200, gin.H{"agents": infos})
 	})
+
+	// r.GET("/api/agents", func(c *gin.Context) {
+	// 	mu.Lock()
+	// 	ids := make([]string, 0, len(agents))
+	// 	for id := range agents {
+	// 		ids = append(ids, id)
+	// 	}
+	// 	mu.Unlock()
+	// 	c.JSON(200, gin.H{"agents": ids})
+	// })
 
 	type RunShellReq struct {
 		Cmd     string `json:"cmd"`

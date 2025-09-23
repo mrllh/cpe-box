@@ -9,6 +9,8 @@ server:
 agent:
   server_addr: "127.0.0.1:9999"
   id: "agent-1"
+  version: "0.0.0"
+  type: "cpe-box"
   token: ""
   tls: false
 
